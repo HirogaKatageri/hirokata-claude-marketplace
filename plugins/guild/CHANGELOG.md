@@ -16,6 +16,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.4.0] - 2026-10-18
+
+### Added
+- **A second backend: Kumiai.** `backend: kumiai` in `.guild/config.yaml`, with `kumiai: {url,
+  workspace}`, puts the board in a Kumiai workspace served as typed MCP tools by a server named
+  `kumiai`, against `kumiaikata/docs/guild-contract.md` 1.0.0 — the whole warehouse, every view and
+  the event feed, so a team reads the same board in the Kumiai UI. **`backend` absent means
+  `local`**, and the local path is unchanged: every SQL block in every skill and agent stays as it
+  was.
+- **`skills/warehouse/references/kumiai.md`** — the kumiai-mode rules (workspace and actor on every
+  call, server-generated keys, plain-JSON text so no hex, one call = one transaction, `read_view`
+  for every `v_*` view, operator filters and paging, `expect_status` as the status guard, patch
+  semantics, the error codes) and an operation map that mirrors `queries.md` section for section
+  with a worked call for each, ending with a short list of known limits.
+- **`guild:warehouse` reads the backend first.** Every board-touching skill and agent keeps its SQL
+  as the local path and carries a compact pointer to the matching `kumiai.md` section.
+- **First check-in asks which backend.** For `kumiai` it checks the server is connected (and gives
+  the `claude mcp add --scope project` line when it is not), refuses a contract major version
+  other than 1 via `whoami`, lets the user pick or create a workspace, and writes the config. No
+  `schema.sql` is applied — Kumiai owns the schema.
+- **Dispatch prompts name the backend**, and a subagent with no `mcp__kumiai__*` tool reports
+  failed rather than falling back to `tursodb`.
+- **`skills/dashboard/scripts/dashboard-kumiai.py`** assembles the dashboard's data island from
+  tool rows with exactly `dashboard.sql`'s keys and field names, escaping `<`, `>` and `&`, so the
+  page is identical on both backends.
+- **`guild:validate` on kumiai calls `check_invariants`** (scoped to a requirement where a section
+  is per-requirement) — `docs/expectations.md` runs server-side, release §9.a uses the
+  `fingerprint` tool, and the dashboard and git assertions stay local, as do fixtures.
+
+### Changed
+- **Every board-touching agent grants `mcp__kumiai__*` in `tools:`**, and every skill that already
+  pre-approved `Bash(tursodb *)` pre-approves `mcp__kumiai__*` beside it. Skills with no
+  `allowed-tools:` line still have none, so local-mode permission prompts are unchanged. The grant
+  is inert until a server named exactly `kumiai` is connected.
+- **The server is not shipped in the plugin's `.mcp.json`.** A bundled OAuth server would prompt
+  every local-mode user to authenticate; the user adds it per project instead. README → *Backends*.
+- **Only the orchestrator changes a status — every status, no exceptions.** A member (strategist,
+  qa-tester, librarian, …) reports the outcome in its final message and the skill that spawned it
+  makes the move as `orchestrator`: the strategist reports `plan PLAN-NNN written`, each
+  assurance skip (`skip REQ-NNN/<node>`) and each `doc <new> supersedes <old>`, and
+  `guild:new-requirement` marks the plan `done`, skips the nodes and supersedes the docs; a
+  qa-tester reports `BUG-NNN re-verified fixed` and `guild:check-in` / `guild:shift` / `guild:qa`
+  closes the bug (and links a fix ticket / moves the bug to `fixing` when filing the fix); the
+  librarian writes the new page and reports the supersession, and the orchestrator adds the
+  `supersedes` edge and moves the old doc to `superseded` together. Members still write content
+  rows (docs, bugs, findings, work logs, edges). `docs/expectations.md` §7 C.b
+  (`status-moved-by-non-orchestrator`) is unscoped again — it reports a member's move on any
+  subject, `plan`, `bug` and `doc` included. On Kumiai, `supersede_doc` accepts `new: {slug}` alone
+  for the orchestrator's half.
+- **The QA carrier requirement is created `todo`, then moved to `in-progress`**, so it has a
+  `moved` event (G7 `no-moved-event`) instead of being born at its end state.
+- **`guild:shift` §2.6 counts `node-moved` events for graph nodes** — the verb `trg_node_moved`
+  writes — not `moved`, which only tickets and the direction carry.
+- No schema change and no migration. **The Kumiai path has not been run against a live server.**
+
 ## [9.3.0] - 2026-10-07
 
 ### Changed
