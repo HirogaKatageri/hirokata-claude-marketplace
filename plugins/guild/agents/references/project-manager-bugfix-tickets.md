@@ -5,7 +5,13 @@ design decisions** (not a feature needing the strategist's planning).
 
 Use your **Bash** tool to create the tail tickets directly (you have no ticket of your own to
 declare follow-ups on, so create them yourself). Create them **in this order** — the cursor
-walks the board in id order, so the fix gets the lowest id and the reviewer the highest:
+walks the board in id order, so the fix gets the lowest id and the reviewer the highest.
+
+On `backend: kumiai` each ticket and its capabilities are **one** `create_task` call, in the
+same order: `{requirement: REQ, title: "Fix: …", priority, capabilities: [{capability:
+"implement", required: true}]}`, then the tests with `test-authoring`, then the review with
+`agent: "reviewer"` and `review` (`guild:warehouse` → `references/kumiai.md` §1 *Task*). The
+SQL below is the local path:
 
 ```bash
 REQ=REQ-0NN

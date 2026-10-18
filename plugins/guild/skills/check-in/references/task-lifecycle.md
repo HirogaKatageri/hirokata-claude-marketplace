@@ -1,8 +1,11 @@
 # Task lifecycle — what a ticket is, and who may move it
 
-A task is a **row** in `.guild/guild.db`. There are no ticket files, no status directories and
-no writable paths. Read one with SQL; the columns are documented in
-`guild:warehouse` → `references/schema.md`, and the DDL is `schema.sql`.
+A task is a **row** in `.guild/guild.db` — or, on `backend: kumiai`, in the configured Kumiai
+workspace, where `get {type: "task", key}` returns the same columns plus its `capabilities` and
+`depends_on` (`guild:warehouse` → `references/kumiai.md`). There are no ticket files, no status
+directories and no writable paths. Read one with SQL; the columns are documented in
+`guild:warehouse` → `references/schema.md`, and the DDL is `schema.sql`. Every rule on this page
+holds in both backends — only the call changes.
 
 ```sql
 SELECT json_object('id', id, 'status', status, 'req', requirement_id, 'plan', plan_id,
@@ -63,14 +66,16 @@ The fix for a blocked ticket is **recruiting**, not a status edit.
 
 ## Who writes what
 
-**The orchestrator owns every status transition.** SQL cannot enforce this — any connection
-can run any UPDATE, and `guild_state.actor` is a courtesy label the triggers copy verbatim.
-It holds because the orchestrator and the agent definitions honor it.
+**The orchestrator owns every status transition — no exceptions.** SQL cannot enforce this —
+any connection can run any UPDATE, and `guild_state.actor` is a courtesy label the triggers
+copy verbatim. It holds because the orchestrator and the agent definitions honor it, and
+`docs/expectations.md` §7 C.b reports any `moved` / `node-moved` / `decided` / `claimed` event
+whose actor is a member, on any subject.
 
 | Writer | May write |
 |---|---|
-| orchestrator | `task.status`, `graph_node.status`, `gate.status`, plus the rows it creates |
-| any agent | `work_log`, `review_finding`, `bug`, `doc`, `coverage` — its own reports |
+| orchestrator | every status-like column — `task`, `graph_node`, `gate`, `requirement`, `project`, `goal`, `plan`, `bug`, `doc`, `inspection` status and `review_finding.disposition` — plus the rows it creates |
+| any agent | **new** rows only: `work_log`, `review_finding`, `bug`, `doc`, `knowledge_edge`, `coverage` stamps, inspection verdicts — its own reports. An outcome that would move a status (`plan PLAN-003 written`, `BUG-004 re-verified fixed`, `doc adr-x-v2 supersedes adr-x`) goes in the agent's final message, and the orchestrator makes the move |
 | nobody | `event` — the triggers write it, and a memory you can edit is not one |
 
 Always guard the transition on the status you expect, and always `RETURNING`. Zero rows back

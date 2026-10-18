@@ -47,6 +47,11 @@ UPDATE graph_node SET status = 'failed' WHERE task_id = 'TASK-005' AND status = 
 RETURNING id, status;
 ```
 
+On `kumiai`: `set_task_status {status: "blocked", expect_status: "todo"}` once a `get` has shown
+no `agent`; `log_work` as `orchestrator`; then `list graph_node where {task_id: "TASK-005",
+status: "running"}` and `set_node_status {status: "failed", expect_status: "running"}` on each (`guild:warehouse` → `references/kumiai.md`
+§5). The cursor fallback above is `read_view v_next_task` and `read_view v_batch`.
+
 **Tell the user now, do not batch it into the wrap-up.** Name the ticket, the missing
 capabilities (`v_blocked_tasks.who` spells them: `needs:implement+rust`), and the one thing
 that fixes it:
@@ -68,7 +73,8 @@ enough**; if the user wants a generalist to take it anyway, that is their call, 
 
 **Unblocking**: the moment an agent file declaring the capability exists, the gap is closed —
 there is nothing to sync. Re-run the roster scan, confirm the new member covers the required
-set, then `UPDATE task SET status = 'todo'` and `UPDATE graph_node SET status = 'pending'`.
+set, then `UPDATE task SET status = 'todo'` and `UPDATE graph_node SET status = 'pending'`
+(kumiai: `set_task_status` and `set_node_status`).
 
 ## CHANGELOG maintenance
 

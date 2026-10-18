@@ -160,6 +160,12 @@ WHERE c.spec_path IS NULL
 ORDER BY CASE c.risk WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, c.id;
 ```
 
+On `backend: kumiai`, `list {type: "coverage", order_by: [{col: "id", dir: "asc"}]}`, paged to
+the end, and apply this query's `WHERE` and `CASE` to the rows — `where` ANDs its conditions, and
+this policy is an OR of five. That is this template's own policy read
+off the rows, not a second definition of `v_coverage_due` — the two ask different questions
+(this one also catches an area with no spec).
+
 The intervals are the guild's current policy, not a law. They live in this query, so changing
 them is an edit here — no migration, no schema change.
 
@@ -190,6 +196,10 @@ WHERE n.node_key = 'qa-execute' AND n.status = 'running';
 SELECT 'TESTER ALREADY CLAIMED: ' || t.id
 FROM task t WHERE t.claimed_by = 'qa-tester' AND t.status = 'in-progress';
 ```
+
+On `kumiai`: `list {type: "graph_node", where: {node_key: "qa-execute", status: "running"}}` and
+`list {type: "task", where: {claimed_by: "qa-tester", status: "in-progress"}}` — both must be
+empty.
 
 Board-wide, not per-requirement. Two inspections on two different requirement carriers still
 share one machine and one set of ports.
@@ -230,7 +240,7 @@ qa-strategist's mission list would be one line; adding a `perf-probe` node betwe
 | "exactly one gate", "no dropped required node", "non-empty reason" | **you**, by running §8. A trigger can hold the gate rule if the warehouse schema ships one — check `SELECT name FROM sqlite_schema WHERE type='trigger'` rather than assuming. |
 | **"one tester at a time"** | **you**, via §5 plus `serial: true` in the agent's frontmatter. The database does not know what a port is, and it does not know what `serial` is either. |
 | "manual trigger only" | **you.** `inspection."trigger"` records what started it; nothing rejects an automated caller. |
-| "the orchestrator owns every status transition" | **nobody.** A convention — the schema has no identity concept and cannot tell whose UPDATE it is. |
+| "the orchestrator owns every status transition" — every one, no exceptions; members report | **nobody** at write time. A convention — the schema has no identity concept and cannot tell whose UPDATE it is. `docs/expectations.md` §7 C.b reports it afterwards from the event feed. |
 
 ---
 
@@ -358,6 +368,11 @@ When §4 returns nothing, mark `qa-check` done and **skip** the rest. Do not del
 the record of an inspection that correctly decided to do nothing is worth keeping, and deleting
 them would make the graph look dropped to §8.
 
+**Every write below is the orchestrator's.** The member that ran `qa-check` reports
+`qa-check REQ-041: nothing due` and moves nothing; the orchestrating skill (`guild:qa` or
+`guild:check-in` §3.4) runs this with `guild_state.actor = 'orchestrator'` (kumiai: `actor:
+"orchestrator"`).
+
 ```sql
 BEGIN;
 UPDATE graph_node SET status = 'done'
@@ -369,6 +384,12 @@ UPDATE gate SET status = 'approved', decision = 'nothing due', decided_at = date
  WHERE node_id = 'REQ-041/gate-repairs';
 COMMIT;
 ```
+
+On `kumiai`: `set_node_status … "done"` for `qa-check`; `resolve_gate {node:
+"REQ-041/gate-repairs", status: "approved", decision: "nothing due"}`; then `set_node_status …
+"skipped"` for each of the five nodes — **after** `resolve_gate`, because an approve marks the
+gate's node `done`. The graph itself is one `instantiate_graph` call, as `../kumiai.md` §4 shows for
+`standard`.
 
 `skipped` counts as finished in the readiness rule, so the graph closes out cleanly rather than
 sitting forever with a `repair` node nothing will ever release.

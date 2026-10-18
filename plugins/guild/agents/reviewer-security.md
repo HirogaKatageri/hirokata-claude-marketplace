@@ -2,7 +2,7 @@
 name: reviewer-security
 model: haiku
 color: red
-tools: ["Read", "Grep", "Glob", "Bash"]
+tools: ["Read", "Grep", "Glob", "Bash", "mcp__kumiai__*"]
 capabilities: [review, security]
 serial: false
 description: |

@@ -3,6 +3,9 @@
 Copy-paste from here. Every snippet below was run against `tursodb` 0.7.2 with
 `schema.sql` applied.
 
+**This page is the `backend: local` path.** A project on `backend: kumiai` uses
+`kumiai.md`, which mirrors this page section for section — §N there is §N here.
+
 **Prefer `SELECT * FROM v_…` wherever a view exists.** Re-deriving a rule by hand is how
 members drift apart: two spellings of "which task is next" give the guild two answers to one
 question, and neither is wrong on its own terms. When you catch yourself writing a
@@ -165,11 +168,13 @@ the test plan. Leave it NULL for the requirement's own implementation plan.
 
 A new plan starts `approval = 'pending'`, and **nothing is built until a human rules on it**.
 `status` and `approval` answer different questions — *is it written* versus *did the user say
-yes* — so move them separately:
+yes* — so move them separately. **Both are the orchestrator's moves**: the strategist reports
+`plan PLAN-001 written` and `guild:new-requirement` marks it, as `orchestrator`:
 
 ```sql
--- the strategist has finished drafting. This does NOT approve anything.
-UPDATE plan SET status = 'done' WHERE id = 'PLAN-001' RETURNING id, status, approval;
+-- the strategist REPORTED it has finished drafting. This does NOT approve anything.
+UPDATE plan SET status = 'done' WHERE id = 'PLAN-001' AND status <> 'done'
+RETURNING id, status, approval;
 
 -- the user said yes. Record WHO ruled — the trigger uses it as the event's actor.
 UPDATE plan
@@ -341,35 +346,45 @@ The relations, and what each is for:
 The rel/type pairings are **CHECK constraints**, not conventions — `supersedes` between two
 non-docs is refused by the engine. Verified on 0.7.2.
 
-### Superseding a decision — two writes, and the order matters
+### Superseding a decision — the member writes the page, the orchestrator retires the old one
 
 Changing your mind is the single most valuable thing this library records, so it gets its own
 recipe. **Never edit the old decision's body to say "we don't do this any more."** That
 destroys the record of what was believed and substitutes a note about it.
 
+**Who writes what.** The member that made the new decision (the strategist, the librarian)
+writes **step 1 only** — a new `doc` row is content, not a move — and reports
+`doc adr-session-store-v2 supersedes adr-session-store` with its one-line reason. The skill that
+spawned it (`guild:new-requirement` for the strategist, `guild:check-in` / `guild:shift` for
+the librarian's `document` node) then runs **steps 2 and 3 together, as `orchestrator`**: the
+edge and the status move belong together, because an inbound `supersedes` edge on a `current`
+doc is G10's `doc.superseded-but-current` breach, and a member moving `doc.status` is §7 C.b's.
+
 ```sql
--- 1. the new decision, as its own document
+-- 1. the member: the new decision, as its own document
 INSERT INTO doc (slug, title, body, kind, status, area, source, created_at, updated_at)
 VALUES ('adr-session-store-v2', 'Sessions move to Postgres',
         CAST(x'<hex-body>' AS TEXT), 'decision', 'current', 'auth', 'strategist',
         strftime('%Y-%m-%dT%H:%M:%SZ','now'), strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 RETURNING slug;
 
--- 2. the edge, which is what actually retires the old one
+-- 2. the orchestrator, from the report: the edge, which is what actually retires the old one
 INSERT INTO knowledge_edge (rel, from_type, from_id, to_type, to_id, note, created_by, created_at)
 SELECT 'supersedes', 'doc', 'adr-session-store-v2', 'doc', d.slug,
-       CAST(x'<hex-reason>' AS TEXT), 'strategist', strftime('%Y-%m-%dT%H:%M:%SZ','now')
+       CAST(x'<hex-reason>' AS TEXT), 'orchestrator', strftime('%Y-%m-%dT%H:%M:%SZ','now')
   FROM doc d WHERE d.slug = 'adr-session-store'
+   AND EXISTS (SELECT 1 FROM doc n WHERE n.slug = 'adr-session-store-v2')
 RETURNING id;
 
--- 3. optional, and only cosmetic
-UPDATE doc SET status = 'superseded' WHERE slug = 'adr-session-store' RETURNING slug;
+-- 3. the orchestrator, in the same script: the status move
+UPDATE doc SET status = 'superseded'
+ WHERE slug = 'adr-session-store' AND status <> 'superseded' RETURNING slug;
 ```
 
-**Step 3 is optional on purpose.** `v_doc_current` hides a document that has an inbound
-`supersedes` edge whatever its `status` says, so the edge alone is enough. Setting the status
-makes the row read correctly on its own, which is worth doing — but the view does not depend
-on you remembering.
+**Step 3 is not optional.** `v_doc_current` hides a document that has an inbound `supersedes`
+edge whatever its `status` says, so readers are safe either way — but G10 reports the edge
+without the status as `doc.superseded-but-current`. Zero rows from step 2 means one of the two
+slugs the member reported does not exist; stop and say so rather than run step 3.
 
 **The old row stays.** A superseded decision is how the project's evolution is read;
 `v_decision_log` lists it with `superseded_by` filled in.
@@ -450,6 +465,13 @@ rules for billing" is `WHERE kind = 'business' AND area = 'billing'` and needs n
 ---
 
 ## 2. Moving something through status
+
+**Every statement in this section is the orchestrator's — on every table, with no exceptions.**
+A member (strategist, developer, qa-tester, librarian, …) never moves a status: it reports the
+outcome in its final message and the skill that spawned it makes the move with
+`guild_state.actor = 'orchestrator'`. That covers `task`, `graph_node`, `gate`, `requirement`,
+`project`, `goal`, and equally `plan`, `bug`, `doc`, `inspection` and a finding's
+`disposition`. Creating a row (a new bug, doc, finding, work-log line) is not a move.
 
 Always guard on the status you expect and always `RETURNING`. Zero rows back means somebody
 already moved it — which is information, not an error:

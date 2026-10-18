@@ -115,16 +115,31 @@ is what makes a skip auditable, and `G8` asserts it exists.
 
 ## Recording it in the graph
 
-**A skipped step is KEPT in the graph, born `skipped`.** It is not deleted and no edge is stitched.
+**A skipped step is KEPT in the graph, and marked `skipped`.** It is not deleted and no edge is stitched.
 `done` and `skipped` both count as finished, so a successor of a skipped node becomes ready the
 moment its other predecessors finish, with no repair of the edges. Node and edge counts stay at
 **N + 10 / 2N + 11**, every template key still has a node, and the board shows the decision as a
 visible `skipped` rather than a hole.
 
-**This is the one status write you make.** You still never move a node as work progresses — that
-is the orchestrator's. Marking an assurance skip is part of *building* the graph, before
-`gate-plan` is decided, and it is why the statement below carries `AND status = 'pending'`: it
-cannot touch a node that has started.
+**You do not write the skip — you record its reason and report it.** Moving a node from
+`pending` to `skipped` is a status move, and the orchestrator owns every status transition with
+no exceptions: a `node-moved` event with you as its actor is the `status-moved-by-non-orchestrator`
+breach (`docs/expectations.md` §7 C.b). Nor may the node be *inserted* at `skipped`: a node off
+`pending` with no `node-moved` event is G7's `no-moved-event`. So the graph is instantiated with
+every node `pending`, exactly as the template writes it, and the skip is split in two:
+
+1. **You** write the `graph_deviation` row for every step you skip or narrow — content, with the
+   reason — and put one line per skipped node in your report:
+   `skip REQ-NNN/test-plan — deviation recorded`.
+2. **`guild:new-requirement`** (Step 8) moves each reported node `pending → skipped` as
+   `orchestrator`, guarded on `status = 'pending'` so it cannot touch a node that has started,
+   before it validates the graph and presents `gate-plan`.
+
+**On `backend: kumiai`**: put each reason in the `instantiate_graph` call's `deviations` and
+leave every node's `status` out (they are created `pending`); report the skips the same way, and
+the orchestrator calls `set_node_status {status: "skipped", expect_status: "pending"}`. If the
+graph already exists, `add_graph_deviation` writes the reason. The reason is a plain string — no
+hex. The SQL below is the local path.
 
 Write the reason first, as hex (it is free text — see the warehouse skill):
 
@@ -132,14 +147,12 @@ Write the reason first, as hex (it is free text — see the warehouse skill):
 r=$(printf '%s' "Assurance: TASK-126 and TASK-127 are prose and a static figure. Their rules are checkable by the author with the site's own commands and nothing in them has behaviour a test could pin; the repository forbids tests that depend on post content." | xxd -p | tr -d '\n')
 ```
 
-**Verification `none`** — skip both test steps:
+**Verification `none`** — skip both test steps. Report `skip REQ-NNN/test-plan` and
+`skip REQ-NNN/test-write`, and write:
 
 ```bash
 { printf "PRAGMA foreign_keys = ON;\n"
   printf "UPDATE guild_state SET value = 'strategist' WHERE key = 'actor';\n"
-  printf "UPDATE graph_node SET status = 'skipped'
-           WHERE requirement_id = 'REQ-NNN' AND node_key IN ('test-plan','test-write')
-             AND status = 'pending' RETURNING id, status;\n"
   printf "INSERT INTO graph_deviation (requirement_id, kind, node_key, reason, created_at)
           SELECT r.id, 'drop-node', k.value, CAST(x'$r' AS TEXT),
                  strftime('%%Y-%%m-%%dT%%H:%%M:%%SZ','now')
@@ -148,17 +161,15 @@ r=$(printf '%s' "Assurance: TASK-126 and TASK-127 are prose and a static figure.
 } | tursodb -q -m list "$DB"
 ```
 
-**Verification `checks`** — skip `test-write` only. Change the `IN (...)` list and the
-`json_array(...)` to `'test-write'` alone. `test-plan` stays and plans the checks.
+**Verification `checks`** — skip `test-write` only. Change the `json_array(...)` to
+`'test-write'` alone and report only that node. `test-plan` stays and plans the checks.
 
-**Review `none`** — skip the four reviewer nodes:
+**Review `none`** — skip the four reviewer nodes. Report all four
+(`skip REQ-NNN/review.reviewer-security`, …) and write one `drop-node`:
 
 ```bash
 { printf "PRAGMA foreign_keys = ON;\n"
   printf "UPDATE guild_state SET value = 'strategist' WHERE key = 'actor';\n"
-  printf "UPDATE graph_node SET status = 'skipped'
-           WHERE requirement_id = 'REQ-NNN' AND node_key = 'review'
-             AND status = 'pending' RETURNING id, status;\n"
   printf "INSERT INTO graph_deviation (requirement_id, kind, node_key, reason, created_at)
           SELECT r.id, 'drop-node', 'review', CAST(x'$r' AS TEXT),
                  strftime('%%Y-%%m-%%dT%%H:%%M:%%SZ','now')
@@ -167,19 +178,25 @@ r=$(printf '%s' "Assurance: TASK-126 and TASK-127 are prose and a static figure.
 ```
 
 **Review `focused`** — skip only the lenses you did *not* name, and record a `reshape`. Here
-security is the lens being left out:
+security and architecture are the lenses being left out, so report
+`skip REQ-NNN/review.reviewer-security` and `skip REQ-NNN/review.reviewer-architecture`:
 
 ```bash
 { printf "PRAGMA foreign_keys = ON;\n"
   printf "UPDATE guild_state SET value = 'strategist' WHERE key = 'actor';\n"
-  printf "UPDATE graph_node SET status = 'skipped'
-           WHERE id IN ('REQ-NNN/review.reviewer-security','REQ-NNN/review.reviewer-architecture')
-             AND status = 'pending' RETURNING id, status;\n"
   printf "INSERT INTO graph_deviation (requirement_id, kind, node_key, reason, created_at)
           SELECT r.id, 'reshape', 'review', CAST(x'$r' AS TEXT),
                  strftime('%%Y-%%m-%%dT%%H:%%M:%%SZ','now')
             FROM requirement r WHERE r.id = 'REQ-NNN' RETURNING id;\n"
 } | tursodb -q -m list "$DB"
+```
+
+The orchestrator's half, for reference — it runs this once per reported node, as `orchestrator`:
+
+```sql
+UPDATE graph_node SET status = 'skipped'
+ WHERE id = 'REQ-NNN/review.reviewer-security' AND status = 'pending'
+RETURNING id, status;
 ```
 
 Use a separate hex reason for each step you skip when the reasons differ. A reason that would fit

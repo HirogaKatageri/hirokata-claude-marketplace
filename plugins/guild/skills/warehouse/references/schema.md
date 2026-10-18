@@ -372,9 +372,11 @@ mean something moved), and pure-structure tables (`graph_edge`, `task_dependency
 Do not tell yourself otherwise. Each of these was a bash guard in the old CLI and is now a
 convention:
 
-1. **"The orchestrator owns every status transition."** SQL has no identity. Any connection
-   can run any UPDATE. `guild_state.actor` is a label the triggers copy verbatim; a lying
-   actor produces a lying feed.
+1. **"The orchestrator owns every status transition."** No exceptions: every `status` column
+   (and `review_finding.disposition`, `plan.approval`) is moved by the orchestrator, and a
+   member reports the outcome instead. SQL has no identity. Any connection can run any UPDATE.
+   `guild_state.actor` is a label the triggers copy verbatim; a lying actor produces a lying
+   feed. `docs/expectations.md` §7 C.b is the check, on every subject.
 2. **"A requirement may not close over a blocked task."** No constraint expresses it.
    `v_requirement_progress.tasks_open` is the query that tells you. Closing anyway is one
    UPDATE away.

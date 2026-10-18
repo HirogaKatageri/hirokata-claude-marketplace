@@ -7,7 +7,7 @@ description: >
   view", "the activity feed", or wants to see the guild's state as a page rather than as
   text. Queries the warehouse and writes the self-contained .guild/dashboard.html, then
   opens it — and can optionally publish it as a shareable Artifact link.
-version: 6.0.0
+version: 6.1.0
 user-invocable: true
 ---
 
@@ -61,6 +61,49 @@ grep -c '<' /tmp/guild-data.json      # must be 0
 Zero means no value in the board can close the `<script>` element that will hold this. If it is
 not zero, **stop** — the escape did not run, and building the page anyway is the defect this
 step exists to prevent.
+
+### On kumiai — the same document, assembled from tool rows
+
+When `.guild/config.yaml` says `backend: kumiai` there is no SQL to run, so the document is built
+from tool calls and **the escape moves into a script** rather than the engine. The page itself —
+Step 3 onwards — does not change by one byte, because the script emits exactly the keys and field
+names `dashboard.sql` does.
+
+1. Make an empty scratch directory, e.g. `D=$(mktemp -d)`.
+2. Make one read per key and save the returned `rows` array, untouched, as `$D/<key>.json`
+   (`guild:warehouse` → `references/kumiai.md` §0 for the call shape):
+
+   | key | call |
+   |---|---|
+   | `brief` | `read_view v_brief` |
+   | `goals` | `read_view v_goal_progress`, `order_by` priority, id |
+   | `projects` · `requirements` · `tasks` · `blocked` · `approvals` | `read_view` on `v_project_progress`, `v_requirement_progress`, `v_board`, `v_blocked_tasks`, `v_plans_pending_approval` |
+   | `nodes` | `list graph_node`, `order_by` requirement_id, id |
+   | `edges` | `list graph_edge`, `order_by` from_node, to_node |
+   | `gates` | `list gate`, `order_by` node_id |
+   | `bugs` · `findings` · `coverage` | `list` on `bug`, `review_finding`, `coverage`, `order_by` id |
+   | `docs` · `decisions` · `docs_stale` · `undocumented` | `read_view` on `v_doc_current`, `v_decision_log`, `v_doc_stale`, `v_undocumented_work` |
+   | `links` | `list knowledge_edge`, `order_by` id |
+   | `activity` | `read_view v_recent_activity`, `order_by` ts desc, `limit` 200 |
+
+   Write each file with the Write tool, not through a shell `echo` — board text is untrusted
+   and must not pass through a shell. A key you could not read is a missing file, and the
+   script renders it `[]`. **Page every key except `activity`** — `limit: 500`, then `offset:
+   next_offset` until it is `null`, concatenating the rows into the one file. A key saved from its
+   first page alone is a board that silently lost rows.
+3. Assemble and escape:
+
+   ```bash
+   python3 -I "${CLAUDE_PLUGIN_ROOT}/skills/dashboard/scripts/dashboard-kumiai.py" "$D" \
+     > /tmp/guild-data.json || echo "BUILD FAILED"
+   grep -c '<' /tmp/guild-data.json      # must be 0, exactly as on local
+   ```
+
+   **A non-zero exit or an empty file is a failed build — stop.** The script refuses a file
+   that is not a list of rows rather than rendering it as an empty view, and an empty island
+   passes the `<` check while showing a board with nothing on it.
+
+Then Step 3, unchanged.
 
 The board holds no wall clock: `json_object` carries only stored timestamps, so the same state
 produces the same bytes and the file diffs cleanly if the user commits it. Every "3 days ago"
@@ -197,8 +240,9 @@ with its rows and do not open a page that failed one.**
 
 ## Rules
 
-- **Read-only.** Every statement is a `SELECT`. Never `UPDATE`, `INSERT` or `DELETE` from here,
-  never stamp `last-checkin`, and never open the database with anything but `tursodb`.
+- **Read-only.** Every statement is a `SELECT` (kumiai: only `read_view` and `list`). Never
+  `UPDATE`, `INSERT` or `DELETE` from here, never stamp `last-checkin`, and never open the
+  database with anything but `tursodb`.
 - **The escape and the `textContent` rule are the two non-negotiables.** Board text is
   untrusted input. If you find yourself reaching for `innerHTML` to render a badge, build the
   badge with `createElement` instead.

@@ -8,8 +8,8 @@ description: >
   Load this skill before writing any QA artifact or filing any bug. Trigger phrases
   include "qa artifacts", "qa charter", "qa mission", "file a bug", "bug row",
   "coverage area", "coverage row", "regression manifest", "qa session log".
-version: 5.0.0
-allowed-tools: Bash(tursodb *)
+version: 5.1.0
+allowed-tools: Bash(tursodb *), mcp__kumiai__*
 ---
 
 # QA Artifacts — What Is a Row, What Is Prose
@@ -23,6 +23,12 @@ does not change. Only where it lands.
 **Load `guild:warehouse` before writing any of the SQL below.** Every free-text value on this
 page — a bug title, a repro, a coverage note — crosses as `CAST(x'<hex>' AS TEXT)`, because a
 repro step ending in `;` at end of line tears the statement in half.
+
+**On `backend: kumiai`** (`.guild/config.yaml`; absent means `local`) the rows below are the same
+rows in a Kumiai workspace, written with tools instead of SQL — and the hex rule is gone, because
+every value is a plain JSON string. Each SQL block below carries its call. The prose artifacts are
+files under `.guild/qa/` in both backends. Full map: `guild:warehouse` → `references/kumiai.md`
+§1 *Bug* and §6.
 
 | Output | Lives in | Written by |
 |--------|----------|------------|
@@ -74,6 +80,19 @@ SELECT 'BUG-' || printf('%03d', COALESCE(MAX(CAST(substr(id, instr(id,'-')+1) AS
 RETURNING id, severity, status;
 ```
 
+On `kumiai`:
+
+```json
+file_bug {"workspace": "<ws>", "actor": "qa-tester",
+          "title": "Checkout accepts quantity 0 and places an order for nothing",
+          "repro": "1. Add any item to the cart\n2. Set the quantity field to 0\n…",
+          "body": "Area: Checkout · Mission: MISSION-checkout …",
+          "severity": "major", "requirement": "REQ-003", "found_by": "qa-tester"}
+```
+
+The result's `key` is the `BUG-NNN`, and a `requirement` that does not exist is `NOT_FOUND`
+rather than an FK refusal.
+
 `RETURNING id` is how you learn the `BUG-NNN` — there is no other way, and the id is derived
 inside the same statement so two testers filing at once cannot collide.
 
@@ -109,23 +128,34 @@ afterwards; anything you leave out stays out.
 
 **The pairing rules have not changed** — a bug still gets a `developer` fix follow-up and a
 `qa-tester` re-verify follow-up, declared in that order, and the follow-up cites `BUG-NNN`.
-Once the fix ticket exists, link it:
+
+**Filing is yours; every move after it is the orchestrator's.** A QA agent writes the `bug` row
+and stops there. When the orchestrator files the fix ticket it links it and moves the bug, and
+when the re-verify tester reports `BUG-014 re-verified fixed` it closes it — both as
+`orchestrator` (`guild:qa` §"How QA flows", `guild:check-in` §3.6). A QA agent that runs either
+statement below is the `status-moved-by-non-orchestrator` breach (`docs/expectations.md` §7 C.b):
 
 ```sql
+-- the orchestrator, once the fix ticket exists
 UPDATE bug SET fix_task_id = 'TASK-051', status = 'fixing'
  WHERE id = 'BUG-014' AND status = 'open'
 RETURNING id, status, fix_task_id;
 
--- and, once the re-verify tester has empirically confirmed it
+-- the orchestrator, once the re-verify tester has REPORTED it empirically confirmed
 UPDATE bug SET status = 'fixed'
  WHERE id = 'BUG-014' AND status IN ('open','fixing')
 RETURNING id, status;
 ```
 
+(kumiai: `update_bug {key: "BUG-014", fix_task: "TASK-051", status: "fixing", expect_status:
+"open"}`, then `update_bug {key: "BUG-014", status: "fixed", expect_status: ["open", "fixing"]}` —
+every status-moving tool takes the guard, and `CONFLICT` is the zero-rows case.)
+
 Guard on the status you expect and always `RETURNING`. Zero rows back means somebody already
 moved it — information, not an error. Never set `updated_at` yourself; a trigger stamps it.
 
-Read them back with the view, never by re-deriving "which bugs are open":
+Read them back with the view (kumiai: `read_view v_open_bugs`), never by re-deriving "which
+bugs are open":
 
 ```sql
 SELECT id, severity, status, found_by, requirement_id, fix_task_id, title FROM v_open_bugs;
@@ -150,6 +180,11 @@ ON CONFLICT(id) DO UPDATE SET
 RETURNING id, risk, spec_path;
 ```
 
+On `kumiai`: `upsert_coverage {id: "checkout", area: "Checkout flow", risk: "high", spec_path:
+"e2e/checkout/place-order.spec.ts", notes: "…"}`. `area` is needed only to create the row; on
+an existing one the tool is a patch, so omitted fields keep their value and the overwrite warning
+below is the local path's.
+
 | Column | Holds |
 |--------|-------|
 | `id` | the key you retype: letters, digits, `.`, `_`, `-`. `checkout`, `auth`, `cart-persistence` |
@@ -171,6 +206,9 @@ UPDATE coverage SET last_inspected_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
  WHERE id = 'checkout'
 RETURNING id, last_inspected_at;
 ```
+
+On `kumiai` the stamp is its own `upsert_coverage {id, last_inspected_at}` call (now, ISO-8601
+UTC), and nothing else.
 
 The **qa-tester** runs that, once per area it genuinely exercised — never for an area it planned
 to reach and did not, because the stamp is a claim. Keeping it out of the upsert is what stops

@@ -9,7 +9,7 @@ description: >
   batch by batch, and puts the two gates in front of the guild master. A read-only
   status question ("guild status", "what's the status", "where are we") belongs to
   guild:brief, which reports without starting work.
-version: 7.0.0
+version: 7.1.0
 user-invocable: true
 ---
 
@@ -26,6 +26,13 @@ repeat until the graph is exhausted.
 **Load `guild:warehouse` first.** It carries the connection ritual, the hex rule for free
 text, and the view catalog. Everything below assumes it. Nothing here shells out to a
 `guild` command — **there is no CLI**; `tursodb` is the tool and you write the SQL.
+
+**Backend.** `backend:` in `.guild/config.yaml` decides which door the board has — `local`
+(the default, and what absence means) or `kumiai`. Every SQL block on this page is the local
+path and is unchanged. On `kumiai`, each one has a tool-call equivalent in `guild:warehouse` →
+`references/kumiai.md`, and the line under the block names the section. Read the backend once
+in Step 1 and **say it in every dispatch prompt** (3.3), because a subagent that guesses writes
+to the wrong board. Pass `workspace` from the config and `actor: "orchestrator"` on every write.
 
 **References — load on demand, not upfront:**
 
@@ -44,11 +51,15 @@ their own `work_log`, `review_finding` and `bug` rows as they go, so the record 
 
 Four rules sit underneath everything below:
 
-1. **You own every status transition.** Agents report; they never move their own work. Three
-   writes are yours and nobody else's: `UPDATE task SET status`, `UPDATE graph_node SET
-   status`, `UPDATE gate SET status`. **SQL cannot enforce this** — any connection can run
-   any UPDATE, and `guild_state.actor` is a label, not an identity. It holds because you and
-   the agent definitions honor it.
+1. **You own every status transition — with no exceptions.** Agents report; they never move
+   anything. Every status-like column is yours and nobody else's: `task.status`,
+   `graph_node.status`, `gate.status`, and also `bug.status`, `plan.status`, `doc.status`,
+   `inspection.status` and `review_finding.disposition`. A member that finishes such an outcome
+   *reports* it (`BUG-004 re-verified fixed`, `doc DOC-B supersedes DOC-A`) and you make the move
+   in 3.4. Creating a row is not a move — agents still write their own content rows. **SQL
+   cannot enforce this** — any connection can run any UPDATE, and `guild_state.actor` is a
+   label, not an identity. It holds because you and the agent definitions honor it, and §7 C.b
+   of `docs/expectations.md` reports every `moved` event whose actor is a member.
 2. **A ticket names a CAPABILITY, not a member — and YOU do the matching.** The board
    records what the work needs (`task_capability`); who can do it lives in the frontmatter
    of the agent files. There is no matcher view. You build the roster by reading
@@ -89,6 +100,9 @@ SQL
 tursodb -q -m list .guild/guild.db < /tmp/q.sql
 ```
 
+On `kumiai` there is no script: each statement is one tool call, and one call is one
+transaction (`kumiai.md` §0).
+
 ---
 
 ## Step 1: Initialize or Load
@@ -96,6 +110,59 @@ tursodb -q -m list .guild/guild.db < /tmp/q.sql
 `.guild/config.yaml` is what says a guild exists here.
 
 ### First check-in (no `.guild/config.yaml`)
+
+**First, ask which backend** — one **AskUserQuestion**, two options:
+
+- **Local** — the board is `.guild/guild.db` on this machine, through `tursodb`. The verified
+  path, and the default.
+- **Kumiai** — the board lives in a Kumiai workspace, shared with the team and visible in the
+  Kumiai UI, through the `kumiai` MCP server.
+
+**Local** → run the block at the end of this list as it stands, then greet them.
+
+**Kumiai** → nothing below applies until the config is written; there is no schema to apply,
+because Kumiai's Postgres carries the schema:
+
+1. **Is the server connected?** Look for tools named `mcp__kumiai__*` in this session. If there
+   are none, ask for the Kumiai URL and stop with:
+
+   ```
+   The kumiai MCP server is not connected. Add it at project scope, then authenticate:
+
+     claude mcp add --scope project --transport http kumiai <url>/mcp
+     /mcp   → select kumiai → Authenticate
+
+   Then check in again.
+   ```
+
+   The name must be exactly `kumiai` — every guild agent is granted `mcp__kumiai__*`, and a
+   server under any other name is a server no guild member can call.
+2. **`whoami`.** Refuse if `contract`'s **major** version is not `1` — say which version the
+   server speaks and stop. A guild calling a 2.x server with 1.x arguments writes plausible,
+   wrong rows.
+3. **`list_workspaces`**, then **AskUserQuestion**: one option per workspace (the default first),
+   plus **Create a new workspace**. On create, ask its name and call `create_workspace`. Never
+   pick one on their behalf — the workspace id decides whose board every later write lands on.
+4. **Write the config**, with the workspace **id** (not its name) and no credential — the OAuth
+   token lives in Claude Code, not in the repo:
+
+   ```bash
+   mkdir -p .guild/docs .guild/qa
+   cat > .guild/config.yaml <<'YAML'
+   # guild configuration. Committed to git.
+   version: 5
+   domain: software
+   backend: kumiai
+   kumiai:
+     url: https://<kumiai-host>
+     workspace: <workspace id>
+   YAML
+   printf 'dashboard.html\n' > .guild/.gitignore
+   ```
+
+Then skip the local block and greet them as it says — a fresh workspace is just as empty.
+
+**Local** — the block:
 
 ```bash
 mkdir -p .guild/docs .guild/qa
@@ -122,6 +189,9 @@ plan, the tickets **and the execution graph**, and ends by presenting
 1. **Re-apply the schema.** `tursodb .guild/guild.db < "${CLAUDE_PLUGIN_ROOT}/schema.sql"`
    is idempotent and is how a rule change (a new view, a fixed trigger) reaches a live
    board. Tables are `IF NOT EXISTS`, so data survives.
+   **On `kumiai`, skip it** — the server owns the schema. Call `whoami` instead and refuse a
+   contract major version other than `1`; if no `mcp__kumiai__*` tool is connected, stop and
+   give the `claude mcp add` line from *First check-in*.
 2. **Scan the roster.** The roster is not in the database — it is the frontmatter of every
    subagent available to the user, and you read it fresh each session. **Skipping this
    leaves you with no way to match a ticket.** Run:
@@ -161,6 +231,10 @@ plan, the tickets **and the execution graph**, and ends by presenting
    SELECT node_id, requirement_id, kind, prompt FROM v_gates_pending;
    ```
 
+   On `kumiai`: `list task where status = "in-progress"`, then `list work_log where task_id`
+   per ticket (newest last), `list graph_node where status = "running"`, and `read_view
+   v_gates_pending` — `kumiai.md` §0 and §3.
+
    - **`logs = 0`** → never started → `UPDATE task SET status = 'todo'`, and if a node was
      bound to it, `UPDATE graph_node SET status = 'pending'`.
    - **The last entry reports done or failed** → the session died between the agent
@@ -197,6 +271,9 @@ SELECT json_object('ts', ts, 'actor', actor, 'verb', verb, 'type', subject_type,
  ORDER BY ts DESC LIMIT 50;
 ```
 
+On `kumiai`: one `read_view` per view above, and the activity feed per `kumiai.md` §3 *What
+moved* — the cutoff is `where: {ts: {op: ">=", value: <last-checkin>}}`.
+
 **Narrate it — do not paste the rows.** Three or four lines is right at check-in:
 
 - which goal/project the work serves, if `v_goal_progress` has rows — and if `projects_runnable`
@@ -232,7 +309,8 @@ do NOT ask a routing question. Give the short narration plus one line — `Resum
 - **Review completed work** → read recent tickets and their work logs, ask if anything needs
   rework; then **Step 3**
 - **Adjust the backlog** → `SELECT * FROM v_board WHERE section_no = 3`; retitle with an
-  `UPDATE task SET title = CAST(x'…' AS TEXT)`; then **Step 3**
+  `UPDATE task SET title = CAST(x'…' AS TEXT)` (kumiai: `read_view v_board` with
+  `where: {section_no: 3}`, then `update_task`); then **Step 3**
 - **Other** (they describe work) → invoke `guild:new-requirement` with it as context
 
 ---
@@ -265,6 +343,10 @@ SELECT json_object('node', n.id, 'key', n.node_key, 'kind', n.kind,
  ORDER BY n.node_key, n.parallel_group, n.id;
 ```
 
+On `kumiai`: `read_view v_ready_nodes` with `where: {requirement_id}` and the same `order_by`,
+then `get task` for each bound node — its `agent` is `pin`, its `required: true` capabilities
+are `needs` (`kumiai.md` §4 *Find what is ready*, §5).
+
 Four outcomes, and each has one right move:
 
 | What comes back | What it means | Do |
@@ -280,6 +362,9 @@ Check the held case explicitly before believing "nothing to do":
 SELECT id, node_key, status FROM graph_node
  WHERE requirement_id = 'REQ-NNN' AND status NOT IN ('done', 'skipped') ORDER BY id;
 ```
+
+(kumiai: `list graph_node` with `where: {requirement_id: "REQ-NNN", status: ["pending",
+"ready", "running", "failed"]}` — the `NOT IN` written as the statuses that remain.)
 
 **No `graph_node` rows at all** → this requirement predates the graph, or the strategist never
 built one. Do not improvise a chain. Go to **3.7**.
@@ -298,7 +383,8 @@ undecided, hand it back and build nothing.
 ### 3.2 Advance the requirement, and form ONE batch
 
 If the requirement is still `todo`: `UPDATE requirement SET status = 'in-progress' WHERE id =
-'REQ-NNN' AND status = 'todo' RETURNING id, status;`
+'REQ-NNN' AND status = 'todo' RETURNING id, status;` (kumiai: `update_requirement
+{status: "in-progress", expect_status: "todo"}`).
 
 Then cut the ready **work** nodes into one batch and run only that one. Readiness propagates
 as work finishes, so you re-run the segment query after every batch — **you never queue the
@@ -427,6 +513,13 @@ UPDATE graph_node SET status = 'running', task_id = 'TASK-011'
 RETURNING id, status, task_id;
 ```
 
+On `kumiai` (`kumiai.md` §2, §4 *Run a node*): `set_task_status {key: "TASK-011", status:
+"in-progress", expect_status: "todo", claimed_by: "developer"}`, then `set_node_status {node:
+"REQ-007/implement.auth-service", status: "running", expect_status: ["pending", "ready"],
+task: "TASK-011"}`, both with `actor: "orchestrator"`. `claimed_by` names the member; `actor`
+keeps the move yours. **Never pass the member as `actor`** — that attributes the move to the
+member, which is the breach §7 of the expectations catches. `CONFLICT` is the zero-rows case.
+
 Zero rows back means somebody already moved it — information, not an error. Set `task_id`
 only when the node is unbound; **a fanned-out key shares one ticket at most once** — the four
 `review.*` nodes share a single reviewer ticket, so bind one and move the others by id alone.
@@ -439,20 +532,35 @@ Agent(
   subagent_type: "guild:{member}",
   prompt: "Your task is TASK-NNN, for REQ-NNN. There are no ticket files — load the
            guild:warehouse skill and read your ticket, your requirement and your plan
-           from .guild/guild.db with SQL. Your brief is the ticket's `objective`.
+           from the board. Your brief is the ticket's `objective`.
            Today's date: {today}
 
-           Record your progress as you go — one INSERT INTO work_log per meaningful
-           outcome, with your own name in `agent` and the entry as CAST(x'<hex>' AS TEXT).
-           That log is what makes an interrupted task resumable, and it is the only thing
-           I read back when you are done.
+           BACKEND: {local | kumiai}.
+           {local:  the board is .guild/guild.db — read and write it with SQL via tursodb.}
+           {kumiai: the board is Kumiai workspace {workspace id} — use the mcp__kumiai__*
+                    tools per guild:warehouse references/kumiai.md, pass that workspace
+                    and your own name as `actor` on every call, and do NOT open
+                    .guild/guild.db. If no mcp__kumiai__* tool is available to you,
+                    report failed and say so — never fall back to tursodb.}
+
+           Record your progress as you go — one work-log entry per meaningful outcome
+           (local: INSERT INTO work_log, your own name in `agent`, the entry as
+           CAST(x'<hex>' AS TEXT); kumiai: log_work). That log is what makes an
+           interrupted task resumable, and it is the only thing I read back when you
+           are done.
 
            Anything you find that is OUT OF SCOPE for this ticket — a bug, a gap, a
            follow-up — file it as a `bug` row and keep going. Do not stop for it. It is
            collected and judged with everything else at the repairs gate.
 
-           Report done or failed in your final message. Do NOT update task.status,
-           graph_node.status or gate.status — the orchestrator owns all transitions."
+           Report done or failed in your final message. Do NOT change ANY status —
+           not task.status, graph_node.status or gate.status, and not a bug's, a
+           plan's, a doc's, an inspection's or a finding's disposition (kumiai: never
+           call set_task_status, claim_task, set_node_status, resolve_gate,
+           update_bug/update_plan/update_inspection with a status, update_finding or
+           supersede_doc). The orchestrator owns every transition, no exceptions: put
+           the outcome in your report instead — e.g. `BUG-004 re-verified fixed`,
+           `doc adr-x-v2 supersedes adr-x: <reason>` — and I make the move."
 )
 ```
 
@@ -501,6 +609,9 @@ SELECT id, reviewer, severity, disposition, file, line, summary
   FROM review_finding WHERE task_id = 'TASK-011' ORDER BY id;
 ```
 
+On `kumiai`: `list work_log where {task_id}` and `list review_finding where {task_id}`, both
+ordered by `id`.
+
 Then record it. **Both halves, always** — the ticket is the record, the node is the ordering,
 and a node left `running` silently stalls everything behind it:
 
@@ -510,6 +621,21 @@ and a node left `running` silently stalls everything behind it:
 | failed | `UPDATE task SET status='failed' WHERE id='TASK-011' RETURNING id,status;` | `UPDATE graph_node SET status='failed' WHERE id='REQ-007/…' RETURNING id,status;` |
 
 Do not set `updated_at` — a trigger stamps it, and another writes the `event` row.
+(kumiai: `set_task_status` with `expect_status: "in-progress"`, then `set_node_status` with
+`expect_status: "running"` — `kumiai.md` §2, §4.)
+
+**Then make the moves the report names.** A member never moves anything but reports what it
+established, and each of these lines is a move only you make, in the same step as closing its
+ticket:
+
+| The report says | Your move (as `orchestrator`) |
+|---|---|
+| `BUG-004 re-verified fixed` (a qa-tester re-verify) | `UPDATE bug SET status='fixed' WHERE id='BUG-004' AND status IN ('open','fixing') RETURNING id,status;` (kumiai: `update_bug {key, status: "fixed", expect_status: ["open","fixing"]}`) |
+| `BUG-004 still broken: …` | nothing — the bug stays; the ticket is `failed` per the table above |
+| `doc adr-x-v2 supersedes adr-x` (the librarian) | the `supersedes` edge and `UPDATE doc SET status='superseded'`, in that order — `queries.md` §1 *Supersede* (kumiai: `supersede_doc {old_slug: "adr-x", new: {slug: "adr-x-v2"}}`, no title or body: the librarian already wrote the page) |
+
+Do not take the member's word for an id you cannot read back: `get` / `SELECT` the row first, and
+a guarded UPDATE that returns zero rows means somebody moved it already — say so.
 
 **A failure does not stop the run and does not ask the user.** That is what the two-gate
 model buys: a failed node holds its own successors, the rest of the graph keeps going, and
@@ -529,6 +655,8 @@ SELECT 'BUG-' || printf('%03d', COALESCE(MAX(CAST(substr(id, instr(id,'-')+1) AS
   FROM bug
 RETURNING id;
 ```
+
+(kumiai: `file_bug` with `found_by: "orchestrator"` — `kumiai.md` §1 *Bug*.)
 
 Then **go back to 3.1** — re-run the segment query and take the next batch. One line between
 batches and nothing more:
@@ -551,6 +679,9 @@ SELECT id, severity, status, found_by, title FROM v_open_bugs;
 SELECT id, who, waived, reason, title FROM v_failed_tasks WHERE requirement_id = 'REQ-NNN';
 SELECT prompt, kind FROM gate WHERE node_id = 'REQ-NNN/gate-repairs';
 ```
+
+(kumiai: `read_view` on the three views with `where: {requirement_id}` — `v_open_bugs` unfiltered
+— and `get gate` for `REQ-NNN/gate-repairs`.)
 
 **2. Present it as one decision.** Use the gate's own prompt — the template wrote it:
 
@@ -611,6 +742,11 @@ UPDATE graph_node SET status = 'done'
 RETURNING id, status;
 ```
 
+**On `kumiai` this is one call** — `read_view v_ready_nodes where {id: "REQ-NNN/gate-repairs"}`
+must return the row first, then `resolve_gate {node, status: "approved", decision}`, which
+moves the gate and the node in one transaction — `done` on approve, `skipped` on reject
+(`kumiai.md` §4 *Resolve a gate*).
+
 - **The `v_ready_nodes` guard is not decoration.** Approving a gate whose predecessors have
   not finished makes `repair` ready immediately, and repairs would run against findings
   nobody produced.
@@ -631,6 +767,10 @@ UPDATE bug SET status = 'fixing', fix_task_id = 'TASK-022'
  WHERE id = 'BUG-004' AND status = 'open' RETURNING id, status;
 ```
 
+(kumiai: `create_task` carries the capabilities in the same call; then
+`update_finding {id: 7, disposition: "fixing", fix_task: "TASK-021"}` and
+`update_bug {key: "BUG-004", status: "fixing", expect_status: "open", fix_task: "TASK-022"}`.)
+
 Go back to **3.1** — the approved gate makes `repair` ready. **There is no automatic
 re-review.** If the user wants another pass later, that is a fresh reviewer ticket.
 
@@ -644,7 +784,8 @@ SELECT id, status, tasks_total, tasks_done, tasks_open, tasks_blocked, tasks_fai
 ```
 
 `tasks_open = 0` → `UPDATE requirement SET status = 'done' WHERE id = 'REQ-NNN' AND status <>
-'done' RETURNING id, status;` then roll the direction above it up — a project whose
+'done' RETURNING id, status;` (kumiai: `update_requirement`, then `update_project` /
+`update_goal` for the roll-up) then roll the direction above it up — a project whose
 requirements are all done is `done`, a goal whose projects are all done is `done` — then append
 a bullet to `CHANGELOG.md` (3.9).
 
@@ -716,6 +857,8 @@ UPDATE guild_state SET value = strftime('%Y-%m-%dT%H:%M:%SZ','now')
  WHERE key = 'last-checkin' RETURNING key, value;
 ```
 
+(kumiai: `set_state {key: "last-checkin", value: "<now, ISO-8601 UTC>"}`.)
+
 ---
 
 ## Step 5: Verify against expectations
@@ -724,7 +867,8 @@ Before you hand the session back, run `guild:validate check-in` — the global i
 §7 of `docs/expectations.md`, which asserts the four ways an orchestrator goes wrong:
 dispatching by a hardcoded name, letting somebody else move a status, building past a gate,
 and re-deriving a rule instead of reading the view. **Report every failure with its rows.**
-Your own account of what you wrote is not evidence; the board is.
+Your own account of what you wrote is not evidence; the board is. On `kumiai`,
+`guild:validate` runs it server-side as `check_invariants {process: "check-in"}`.
 
 ## Key Rules — at a glance
 
@@ -732,8 +876,10 @@ Each is argued in full where it first applies above; this is the checklist, not 
 
 1. The graph is the chain, and you do not know it — never invent an order, widen a batch,
    merge two, or dispatch a node the graph did not offer (§3.1–3.2).
-2. You own every status transition — `task.status`, `graph_node.status`, `gate.status`.
-   Agents' only board writes are `work_log`, `review_finding`, `bug` (Core model).
+2. You own every status transition, with no exceptions — `task`, `graph_node`, `gate`, and
+   also `bug`, `plan`, `doc`, `inspection` and a finding's `disposition`. Agents report the
+   outcome; you move it (3.4). Agents' board writes are content rows only — `work_log`,
+   `review_finding`, new `bug` and `doc` rows, knowledge edges (Core model).
 3. Record BOTH halves of every 3.4 row — ticket and node, always.
 4. Two gates, and only one is yours: `gate-plan` (new-requirement's), `gate-repairs` (§3.5).
 5. Problems are collected, not escalated — judged together at `gate-repairs` (§3.5).

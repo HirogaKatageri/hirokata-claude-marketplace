@@ -8,9 +8,9 @@ description: >
   with nobody watching. Runs the unattended loop: claim bounties, run segments,
   commit per completed task, retry once, record every failure — and STOP at the next
   gate, because a gate is the one decision no subagent can make.
-version: 5.0.0
+version: 5.1.0
 user-invocable: true
-allowed-tools: Bash(tursodb *), Bash(git *)
+allowed-tools: Bash(tursodb *), Bash(git *), mcp__kumiai__*
 ---
 
 # Guild Shift — working the board while you are away
@@ -28,6 +28,14 @@ why, and waits.
 parsing `-m list` positionally, reading views instead of re-deriving them, `RETURNING` on every
 mutation, errors arriving on stdout — apply to every one of them. At 3am there is nobody to
 notice a swallowed error.
+
+**Backend.** `backend:` in `.guild/config.yaml` — absent means `local`. Every SQL block here is
+the local path. On `kumiai`, each has a tool-call equivalent (`guild:warehouse` →
+`references/kumiai.md`), named under the block; pass `workspace` from the config and
+`actor: "orchestrator"`. Several shift reads are "since the shift started": that is `where: {ts:
+{op: ">=", value: <the started ts>}}`. **Page every count to the end** (`offset: next_offset`
+until it is `null`) — at 3am a count taken from the first page is as dangerous as a swallowed
+error. The git half of this skill is identical in both backends.
 
 This skill is `guild:check-in` with the human taken out of the middle. **The dispatch protocol is
 unchanged and is not restated here** — how a batch is run, how an agent is spawned, and how a
@@ -94,6 +102,11 @@ SELECT r.id, r.priority FROM requirement r
  ORDER BY r.priority, r.id;
 ```
 
+On `kumiai`: `read_view v_gates_pending`; `list {type: "event", where: {subject_type: "shift"},
+order_by: [{col: "ts", dir: "desc"}], limit: 50}` — an open shift is the newest `started` whose
+`subject_id` has no `ended`; and `list {type: "requirement", where: {status: {op: "<>", value:
+"done"}}}`, keeping those with at least one `graph_node` row.
+
 - **A gate is already pending** → there is no shift to work. Present that gate (Step 4) and
   stop. Starting a shift that ends on its first turn wastes a night.
 - **A shift is already open** → you are resuming it. Its budget is the one recorded in that
@@ -135,6 +148,11 @@ RETURNING subject_id, ts, payload;
 `WHERE NOT EXISTS (…)` is what makes a second invocation **resume** rather than open a rival
 shift. Zero rows back means one was already open — read it, and use its budget.
 
+On `kumiai` the guard is the preflight read above, and the write is `record_event {verb:
+"started", subject_type: "shift", subject_id: "SHIFT-20261018T020000Z", payload: {max_tasks: 10,
+max_minutes: 60, requirement: null}}`. These two `record_event` calls are still the only
+hand-written events in the guild.
+
 The mutable scratch state that is not memory goes in `guild_state`, where mutable things belong:
 
 ```sql
@@ -143,6 +161,8 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value;
 INSERT INTO guild_state (key, value) VALUES ('shift:stall', '0')
 ON CONFLICT(key) DO UPDATE SET value = excluded.value;
 ```
+
+(kumiai: `set_state {key: "shift:used", value: "0"}` and the same for `shift:stall`.)
 
 ## Step 2 — the loop
 
@@ -180,6 +200,13 @@ SELECT r.id, r.priority,
                     WHERE g.requirement_id = r.id AND g.status <> 'pending'))
  ORDER BY tier, r.priority, r.id;
 ```
+
+On `kumiai` the candidate query is assembled, not written — and every rule in it is still a view
+or a column, read rather than re-derived. Per open requirement with a graph:
+`get_state {key: "graph-template:REQ-NNN"}` (the template, so the tier);
+`read_view v_ready_nodes where {requirement_id, kind: "work"}`, dropping nodes whose bound
+ticket (`get task`) is `blocked` or `failed` (`ready_work`); and `list graph_node where
+{requirement_id}` for `running`, `failed` and "anything not `pending`". Sort by tier, priority, id.
 
 Take the **first row with `ready_work > 0`**. If the user pinned a requirement, add
 `AND r.id = 'REQ-NNN'`. If no row has ready work, go to Step 3 — the shift is over.
@@ -219,7 +246,10 @@ enforces that list — it is enforced by you reading it.
 ### 2.3 — the segment, and the dispatch
 
 Read what runs, one batch at a time. `v_ready_nodes` is the definition of ready; do not
-re-derive it.
+re-derive it. (kumiai: `read_view v_ready_nodes where {requirement_id, kind: "work"}`, ordered
+by `id`; the claim and the node move are `set_task_status` (with `expect_status` and the member
+as `claimed_by`) and `set_node_status`, exactly as in `guild:check-in` 3.3 — never with the
+member as `actor`.)
 
 ```sql
 SELECT id, node_key, kind, task_id, parallel_group
@@ -234,7 +264,10 @@ batch 1. Never widen a batch, never merge two, never re-order them.
 Then follow `guild:check-in`'s dispatch protocol verbatim: resolve the member with the
 pin/capability rule in its §3.3 — the pin wins outright, otherwise `roster.py --covers` the
 ticket's required set and take the first row — move the ticket and the node in that order,
-spawn with the Agent tool, and record both halves when it returns.
+spawn with the Agent tool, and record both halves when it returns. **Then make the moves the
+report names, exactly as check-in §3.4's second table does** — `BUG-NNN re-verified fixed` closes
+the bug, `doc <new> supersedes <old>` gets its edge and the old doc's move to `superseded` — as
+`orchestrator`. A member moves no status, on any table; you are the only one awake who does.
 
 **Scan the roster once, at the top of the shift**, and reuse it all night. It is a directory of
 markdown files, not a table, and nothing writes to it while you run.
@@ -317,6 +350,12 @@ UPDATE graph_node SET status = 'pending'
  WHERE id = 'REQ-001/implement.auth' AND status = 'failed' RETURNING id, status;
 ```
 
+On `kumiai`: the retry count is `list {type: "work_log", where: {task_id: "TASK-001", entry: {op:
+"like", value: "Shift retry%"}, ts: {op: ">=", value: <the started ts>}}}`; then `log_work`,
+`set_task_status {status: "todo", expect_status: "failed", claimed_by: null}` (which clears
+`claimed_at` too) and `set_node_status {status: "pending", expect_status: "failed"}`. The block is
+`set_task_status {status: "blocked", expect_status: "todo"}`, once a `get` has shown no `agent`.
+
 **Still failing → give up on that branch and move on.** The node stays `failed`, its ticket is
 failed with it, and the shift continues with the requirement's other independent work. A `failed`
 node holds only its own successors, which is exactly right: the dead branch stops, the rest runs.
@@ -348,10 +387,12 @@ REQ-007 batch 2/5 done — implement.migrations (developer) — committed 9f2c1a
 ### 2.6 — the stop check, at the end of every turn
 
 ```sql
--- tasks spent: DISTINCT graph nodes moved since the shift opened
+-- tasks spent: DISTINCT graph nodes moved since the shift opened. A node move is the
+-- `node-moved` verb (schema.sql trg_node_moved); `moved` is the tickets' and the direction's
+-- verb and matches no node, which is how this count once read 0 forever.
 SELECT COUNT(*) AS used FROM (
   SELECT em.subject_id FROM event em
-   WHERE em.subject_type = 'graph_node' AND em.verb = 'moved'
+   WHERE em.subject_type = 'graph_node' AND em.verb = 'node-moved'
      AND em.ts >= (SELECT ts FROM event WHERE subject_type = 'shift' AND verb = 'started'
                      AND subject_id = 'SHIFT-…')
    GROUP BY em.subject_id);
@@ -369,6 +410,13 @@ SELECT COUNT(*) FROM v_gates_pending;
 -- in this loop would ever surface it.
 SELECT COUNT(*) FROM v_plans_pending_approval;
 ```
+
+On `kumiai`: `list {type: "event", where: {subject_type: "graph_node", verb: "node-moved", ts:
+{op: ">=", value: <the started ts>}}, limit: 500}`, paged to the end, and count distinct
+`subject_id` — that is `used`. A node move is the `node-moved` verb (`schema.sql`
+`trg_node_moved`); `moved` is the verb of tickets and the direction, and matches no node. Minutes are now minus the `started` `ts`.
+`read_view` on `v_gates_pending` and `v_plans_pending_approval`, counted. The two scratch keys are
+`set_state` every turn.
 
 **The stall detector.** Compare `used` with `guild_state['shift:used']` from the previous turn.
 Same number means nothing moved between them and the loop is spinning; **two in a row ends the
@@ -423,6 +471,10 @@ SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'orchestrator', 'ended', 'shift',
 RETURNING subject_id, payload;
 ```
 
+On `kumiai`: `record_event {verb: "ended", subject_type: "shift", subject_id: <the open
+shift's id>, payload: {reason: "gate", note: "…", tasks: 5, minutes: 42, requirement:
+"REQ-007"}}` — the note is a plain string, no hex.
+
 `reason` comes from the closed vocabulary above and nowhere else — `guild:brief` and the morning
 report both read it back, and a reason one surface writes and another cannot read is worse than
 no reason at all.
@@ -468,6 +520,9 @@ SELECT json_object('task', id, 'group', COALESCE(parallel_group,''), 'files', fi
   FROM task WHERE requirement_id = 'REQ-NNN' AND node_key = 'implement';
 SELECT id, node_key, kind, status FROM graph_node WHERE requirement_id = 'REQ-NNN' ORDER BY id;
 ```
+
+(kumiai: `get` the requirement and the plan for their bodies, `list task where {requirement_id,
+node_key: "implement"}`, `list graph_node where {requirement_id}`.)
 
 Present the plan, its tickets and their file sets, and **every roster gap the plan's Technical
 Decisions records by name** — each is a member the strategist proposed and the guild does not
@@ -519,6 +574,10 @@ UPDATE graph_node SET status = 'done'
 RETURNING id, status;
 ```
 
+On `kumiai` that is one call: `resolve_gate {node: "REQ-007/gate-repairs", status: "approved",
+decision: "<their words>"}`, after `read_view v_ready_nodes where {id: "REQ-007/gate-repairs"}`
+returns the row (`kumiai.md` §4).
+
 The decision **is** the fan-out, so it is never blank — `none` is how they approve and repair
 nothing. Pass their own words through.
 
@@ -555,6 +614,11 @@ SELECT node_id, requirement_id, node_key, kind FROM v_gates_pending;
 SELECT id, requirement_id, gate_node_id, title FROM v_plans_pending_approval;
 ```
 
+On `kumiai`: the shift events are `list event where {subject_type: "shift"}` newest first; the
+activity is `read_view v_recent_activity` with `where: {ts: {op: ">=", value: <the last
+started ts>}}`, newest first and paged; the four
+left-behind lists are one `read_view` each.
+
 Narrate stop reason first, then what got done, then the decisions waiting, then what you would do
 next. **Name things** — "TASK-013 failed twice and was given up on; its edits are quarantined in
 `.guild/backup-revert-TASK-013-…`" is a briefing. "1 failure" is not.
@@ -568,7 +632,8 @@ never past one, §11.b what you never touched, §11.c the failure policy, §11.d
 ticket became a roster gap rather than a silent skip, §11.e that every stop said why, and
 §11.f the git safety checks — never pushed, never on the default branch. The assertions run
 *after* the night, not during it, so a failure here is something the user reads at breakfast.
-**Report every one with its rows, before the summary.**
+**Report every one with its rows, before the summary.** On `kumiai` the board-side sections run
+as `check_invariants {process: "shift"}`; §11.f is git, and runs locally as written.
 
 ## Arming it, and notifying on it
 
@@ -588,7 +653,8 @@ Each is argued in full where it first applies above; this is the checklist, not 
 4. One requirement, one batch, per turn — never queue a whole segment blind (§2).
 5. A failure does not stop the run or wake the user (§2.5) — collected and judged at
    `gate-repairs`, except a file collision or a requirement left with nothing runnable.
-6. Record both halves, always — the ticket and the node (§2.3).
+6. Record both halves, always — the ticket and the node (§2.3) — then the moves the member
+   reported (a re-verified bug, a supersession). Only you move a status, on any table.
 7. Never improvise a member — no eligible agent means write the block (§2.5), not a substitute.
 8. Never change direction — no goal, project, priority, or retitling somebody else's work.
 9. `started` and `ended` are the only hand-written `event` rows, never updated or deleted (§1).

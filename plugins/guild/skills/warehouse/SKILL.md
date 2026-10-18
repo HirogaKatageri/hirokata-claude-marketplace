@@ -1,7 +1,9 @@
 ---
 name: warehouse
 description: >
-  The guild's warehouse — how to read and write guild data with SQL. Load this
+  The guild's warehouse — how to read and write guild data: SQL against the
+  local tursodb board by default, or the Kumiai MCP tools when the project's
+  .guild/config.yaml says `backend: kumiai`. Load this
   before touching anything in the guild database: tasks, requirements, plans,
   goals, projects, bugs, review findings, work logs, coverage, the execution
   graph, gates, ticket capabilities, or the event feed. Also load it for the
@@ -12,14 +14,34 @@ description: >
   says where. Trigger phrases include "guild board", "guild brief", "next task",
   "claim a task", "open bounties", "file a bug", "log work", "review finding",
   "ready nodes", "resolve a gate", "the roster", "match an agent", "guild.db",
-  "tursodb", "warehouse", "guild database", "guild SQL", "write a doc",
+  "tursodb", "kumiai", "warehouse", "guild database", "guild SQL", "write a doc",
   "the library", "knowledge graph", "decision record", "ADR", "link a doc",
   "supersede a decision", "stale docs", "undocumented work".
-version: 1.1.0
-allowed-tools: Bash(tursodb *)
+version: 1.2.0
+allowed-tools: Bash(tursodb *), mcp__kumiai__*
 ---
 
 # The warehouse
+
+## Step 0 — which backend is this board on?
+
+```bash
+backend=$(awk '/^backend:/ {print $2}' .guild/config.yaml 2>/dev/null); echo "${backend:-local}"
+```
+
+- **`local`, or no `backend:` line** — everything below this section applies, unchanged.
+  `tursodb` is the tool and you write SQL.
+- **`kumiai`** — the same board is served by the `kumiai` MCP server as typed tools
+  (`mcp__kumiai__*`). **Load `references/kumiai.md` instead of `queries.md`**: *Connect* and
+  the seven rules below are about a SQL engine you are not talking to, and the half that still
+  matters — read the view, keys not counters, nothing is deleted — is restated there with the
+  tool calls. *The library is a graph* below applies to both backends.
+  If no `mcp__kumiai__*` tool is available, stop and say so; never fall back to `tursodb` in a
+  kumiai project, because a write to the wrong board is a write nobody else will ever read.
+
+The roster is the agent files in **both** backends. Neither one stores it.
+
+## Local — `tursodb`
 
 `tursodb` is the tool. There is no guild CLI — you write SQL. The schema carries the
 guild's rules as CHECK constraints, views and triggers, so the way to be correct is to
@@ -80,7 +102,10 @@ The schema lives at `${CLAUDE_PLUGIN_ROOT}/schema.sql`. Applying it is idempoten
 
 Set your name once per script so the triggers attribute the events to you:
 `UPDATE guild_state SET value = 'developer-svelte' WHERE key = 'actor';`
-It is a label, not an identity — nothing authenticates it.
+It is a label, not an identity — nothing authenticates it. **Only `orchestrator` ever moves a
+status** — any table, any status-like column. A member writes new rows and reports outcomes
+(`plan PLAN-003 written`, `BUG-004 re-verified fixed`, `doc adr-x-v2 supersedes adr-x`); the
+skill that spawned it makes the move (`references/queries.md` §2).
 
 ## The library is a graph, not a pile
 
@@ -94,8 +119,9 @@ make it work, and skipping any of them turns it back into a pile:
 2. **Link it to something.** A document with no edge is invisible to `v_doc_stale` (nothing
    to compare against) and counts for nothing in `v_undocumented_work`. Find the orphans with
    `SELECT slug FROM v_doc_current WHERE edges = 0`.
-3. **Supersede — never overwrite — a decision.** Write the new ADR as its own row and add a
-   `supersedes` edge. The old one stays and `v_doc_current` hides it. Editing the old body to
+3. **Supersede — never overwrite — a decision.** Write the new ADR as its own row and report
+   the supersession; the orchestrator adds the `supersedes` edge and moves the old one to
+   `superseded` (`references/queries.md` §1). The old one stays and `v_doc_current` hides it. Editing the old body to
    say "we don't do this any more" destroys the only record of what was believed.
 
 **There is no traversal.** `WITH RECURSIVE` is a parse error on tursodb, so a chain is one
@@ -116,6 +142,11 @@ legitimately contain a cycle.
   the missing foreign key, superseding a decision, walking the graph one hop at a time,
   and the two drift reads. Load it when you are about to write SQL. Copy from it rather
   than improvising.
+- **`references/kumiai.md`** — the kumiai backend: workspace and actor parameters, keys,
+  plain-JSON text, one call = one transaction, `read_view` for every view, the error codes, and
+  an operation map that gives the tool call for **every section of `queries.md`**, by the same
+  section number. Load it instead of `queries.md` and `tursodb-gotchas.md` when
+  `backend: kumiai`.
 - **`references/tursodb-gotchas.md`** — the traps, each reproduced against the real
   binary: the statement splitter, invalid UTF-8, `-m list` forgery, no `WITH RECURSIVE`,
   no FTS5, `LIKE` escaping, output-channel injection, non-atomic scripts, and the

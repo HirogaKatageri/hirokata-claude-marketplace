@@ -1,7 +1,7 @@
 ---
 name: comprehensive-review
 description: Use this skill when the user wants to review code changes, verify implementation quality, or check readiness before a PR or deployment. Trigger on phrases like "review my changes", "run comprehensive review", "check all my code", "am I ready for PR", "before I create a PR", "before I merge", "code audit", "quality check", "verify my implementation", "is my feature complete", "run all reviewers", "check if my implementation is complete", "deep code review", "deep review", or any multi-dimensional code analysis request. Also use proactively when the user says they've finished a phase, completed a feature, or are wrapping up work — even if they don't explicitly ask for a "review". Covers requirements compliance, test coverage, edge cases, architecture alignment, and security.
-version: 0.3.0
+version: 0.4.0
 user-invocable: true
 ---
 
@@ -30,6 +30,11 @@ Orchestrates five specialized review agents in parallel to provide a complete, m
    printf "SELECT body FROM requirement WHERE id = 'REQ-007';\n" | tursodb -q -m list .guild/guild.db
    printf "SELECT body FROM plan WHERE requirement_id = 'REQ-007';\n" | tursodb -q -m list .guild/guild.db
    ```
+
+   If `.guild/config.yaml` says `backend: kumiai`, the board is a Kumiai workspace instead:
+   `list {type: "requirement"}`, `get {type: "requirement", key: "REQ-007"}` and `list
+   {type: "plan", where: {requirement_id: "REQ-007"}}` (`guild:warehouse` →
+   `references/kumiai.md`). Tell the reviewers you dispatch which backend it is.
 
    Keep `-m list` even for a single column: the default `pretty` mode draws a box and
    **truncates long values with an ellipsis**, which would silently hand you a clipped

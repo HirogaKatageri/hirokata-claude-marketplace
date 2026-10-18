@@ -8,9 +8,9 @@ description: >
   end-to-end regression coverage. Seeds the guild's independent QA discipline:
   a qa-strategist maps the risk surface onto the board as coverage rows, then
   qa-testers run the app and author Playwright specs while filing defects as bug rows.
-version: 5.0.0
+version: 5.1.0
 user-invocable: true
-allowed-tools: Bash(tursodb *)
+allowed-tools: Bash(tursodb *), mcp__kumiai__*
 arguments:
   - name: scope
     description: "What to QA — 'product' for a full pass, or a named area/flow (e.g. 'checkout')"
@@ -37,6 +37,11 @@ Three skills carry the detail; load what you need:
 - `guild:warehouse` — how to write SQL against the board at all. **Load it first.**
 - `guild:qa-mindset` — the discipline (pillars, what-if catalog, hybrid oracle)
 - `guild:qa-artifacts` — which output is a row, which is prose, and the exact SQL for each
+
+**Backend.** `backend:` in `.guild/config.yaml` — absent means `local`, and every SQL block here
+is the local path. On `kumiai` each is a tool call against `workspace` from the config, with
+your name as `actor` (`guild:warehouse` → `references/kumiai.md`); the line under each block
+names it. `.guild/qa/` and the committed specs are files in both backends.
 
 ## Step 1 — is there a guild
 
@@ -77,6 +82,8 @@ pass. Look for it before creating it:
 SELECT id, status FROM requirement WHERE title = 'Product QA & E2E Regression';
 ```
 
+(kumiai: `list {type: "requirement", where: {title: "Product QA & E2E Regression"}}`.)
+
 If it exists, use that id and skip to Step 5. If not, create it — and **write the whole document
 in the one INSERT**. The body crosses as hex, because it contains `#`, `|` and lines that could
 end in `;`. Full document text: `references/umbrella-body.md`.
@@ -91,11 +98,25 @@ UPDATE guild_state SET value = 'orchestrator' WHERE key = 'actor';
 
 INSERT INTO requirement (id, project_id, title, body, status, priority, created_at, updated_at)
 SELECT 'REQ-' || printf('%03d', COALESCE(MAX(CAST(substr(id, instr(id,'-')+1) AS INTEGER)), 0) + 1),
-       NULL, 'Product QA & E2E Regression', CAST(x'<hex-body>' AS TEXT), 'in-progress', 3,
+       NULL, 'Product QA & E2E Regression', CAST(x'<hex-body>' AS TEXT), 'todo', 3,
        strftime('%Y-%m-%dT%H:%M:%SZ','now'), strftime('%Y-%m-%dT%H:%M:%SZ','now')
   FROM requirement
 RETURNING id, status;
 ```
+
+Then open it, in a second statement, with the id the INSERT returned. It is created `todo` and
+MOVED, never inserted at its end state: a row born `in-progress` has no `moved` event, and §3 G7
+(`no-moved-event`) reports it on every QA run.
+
+```sql
+UPDATE requirement SET status = 'in-progress', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+ WHERE id = 'REQ-…' AND status = 'todo'
+RETURNING id, status;
+```
+
+On `kumiai`: `create_requirement {title: "Product QA & E2E Regression", body: <the document as a
+plain string>, project: null, priority: 3}` — no hex file needed — then open it with
+`update_requirement {key, status: "in-progress", expect_status: "todo"}` — the same two steps.
 
 It opens `in-progress` and **stays there forever** — it is standing work, not a feature, and it
 is deliberately never included in a release. `project_id` is NULL: QA is not part of any one project.
@@ -128,6 +149,10 @@ INSERT INTO task_capability (task_id, capability, required)
 SELECT t.id, 'qa-planning', 1 FROM task t WHERE t.id = 'TASK-042'
 ON CONFLICT DO NOTHING;
 ```
+
+On `kumiai` the ticket and its capability are one call: `create_task {requirement: "REQ-004",
+title, objective, body, priority: 2, capabilities: [{capability: "qa-planning", required:
+true}]}` (`kumiai.md` §1 *Task*).
 
 Ticket body:
 
@@ -204,13 +229,31 @@ QA reuses all existing orchestration; nothing is special-cased.
       AND EXISTS (SELECT 1 FROM task WHERE id = 'TASK-050')
    RETURNING task_id || ' after ' || depends_on;
    ```
+   (kumiai: `add_task_dependency {task: "TASK-051", depends_on: "TASK-050"}`, or `depends_on`
+   on the `create_task` itself.)
+   When you file the fix ticket, link it and move the bug in the same step, as `orchestrator` —
+   the tester that filed the bug never moves it:
+
+   ```sql
+   UPDATE bug SET fix_task_id = 'TASK-050', status = 'fixing'
+    WHERE id = 'BUG-014' AND status = 'open'
+   RETURNING id, status, fix_task_id;
+   ```
+   (kumiai: `update_bug {actor: "orchestrator", key: "BUG-014", fix_task: "TASK-050", status:
+   "fixing", expect_status: "open"}`.)
 4. The re-verify qa-tester **is** the verification tail for QA fixes: it empirically confirms the
-   fix, promotes the spec from `fixme` to passing, and closes the bug:
+   fix, promotes the spec from `fixme` to passing, and **reports** `BUG-014 re-verified fixed`
+   (or `BUG-014 still broken: …`). It does not close the bug — **you do**, as `orchestrator`, when
+   the report says re-verified fixed, alongside closing the re-verify ticket:
 
    ```sql
    UPDATE bug SET status = 'fixed' WHERE id = 'BUG-014' AND status IN ('open','fixing')
    RETURNING id, status;
    ```
+
+   (kumiai: `update_bug {actor: "orchestrator", key: "BUG-014", status: "fixed", expect_status:
+   ["open", "fixing"]}`.) A report of `still broken` leaves the bug where it is; the failed
+   re-verify follows the ordinary failure path.
 
    QA fixes get no test-writer or reviewer tickets — a reviewer on the standing umbrella would
    be gated behind every other pending QA ticket, forever.
@@ -222,6 +265,8 @@ SELECT id, severity, status, found_by, requirement_id, fix_task_id, title FROM v
 SELECT id, risk, interval_days, days_since, spec_path, area FROM v_coverage_due;
 SELECT fact, value FROM v_brief;
 ```
+
+(kumiai: one `read_view` each.)
 
 ## Standing cadence — opt-in, per project
 
@@ -236,7 +281,7 @@ Run `guild:validate qa` after seeding, and again after each cycle node closes. �
 `docs/expectations.md` covers the `maintenance` template: §10.a that a person triggered the
 inspection, §10.c the **one tester board-wide** invariant, §10.d that only areas actually
 exercised were stamped, §10.f that the graph is still six nodes, five edges and one gate.
-**Run §10.c before every `qa-execute` dispatch** — nothing in the database will stop a second
+On `kumiai`: `check_invariants {process: "qa"}`. **Run §10.c before every `qa-execute` dispatch** — nothing in the database will stop a second
 Playwright run, and this is the only guard there is. Report every failure with its rows.
 
 ## Rules

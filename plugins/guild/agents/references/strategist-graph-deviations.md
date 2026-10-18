@@ -3,7 +3,11 @@
 Load this at Step 6b, when the work genuinely calls for departing from the template. A clean
 instantiation needs none of this.
 
-A deviation is the node/edge change **plus** a `graph_deviation` row recording it. Write both:
+A deviation is the node/edge change **plus** a `graph_deviation` row recording it. Write both.
+On `backend: kumiai` they go in the `instantiate_graph` call's `nodes`/`edges` and `deviations`
+when the graph is being built, or `add_graph_node` / `add_graph_edge` + `add_graph_deviation`
+on an existing one (`guild:warehouse` → `references/kumiai.md` §4); the reason is a plain
+string. The SQL below is the local path:
 
 ```bash
 r=$(printf '%s' "the payments provider's webhook API is undocumented in the repo and no doc row

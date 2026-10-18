@@ -30,6 +30,22 @@ db:
 `mode: cloud` adds `url_env:` and `token_env:` — the **names** of environment variables, never
 their values. The file is committed to git and must never hold a credential.
 
+`backend:` chooses the board itself, and absence means `local` — everything else on this page:
+
+```yaml
+version: 5
+backend: kumiai          # local (default) | kumiai
+kumiai:
+  url: https://<kumiai-host>
+  workspace: <workspace id>
+```
+
+On `kumiai` there is **no `guild.db`, no schema to apply and no `mode:`** (`mode` only chooses
+between tursodb and Turso Cloud, which is a `local`-backend question). The board is the Kumiai
+workspace; the OAuth token lives in Claude Code's MCP config, never here. `.guild/docs/`,
+`.guild/qa/`, `dashboard.html` and `templates/` are unchanged. The tool calls are in
+`guild:warehouse` → `references/kumiai.md`.
+
 ## The database is the durable board
 
 There is no journal. **`event` is the record**, written by triggers on every

@@ -24,6 +24,21 @@ printf "SELECT body FROM requirement WHERE id='REQ-NNN';\n" | tursodb -q -m list
 printf "SELECT body FROM plan WHERE id='PLAN-NNN';\n"       | tursodb -q -m list "$DB"
 ```
 
+**Backend.** Read `backend:` in `.guild/config.yaml` — absent means `local`, and the dispatch
+prompt names it too. Every SQL block on this page is the local path. On `kumiai` the board is a
+Kumiai workspace: use the `mcp__kumiai__*` tools per `guild:warehouse` → `references/kumiai.md`,
+pass `workspace` from the config and your own name as `actor`, send free text as plain strings
+(no hex), and never open `.guild/guild.db`. If no `mcp__kumiai__*` tool is available to you,
+report failed and say so — never fall back to `tursodb`. The calls:
+
+- read: `get task` (its `objective`), `get requirement`, `get plan`; the sibling tickets are
+  `list task where {requirement_id}`, their test plans `list plan where {requirement_id,
+  task_id}`, and what is already filed `list review_finding where
+  {task_id: [...]}` (§0)
+- write each finding: `add_finding {task: "$T", severity, summary, detail, file, line}` — the
+  reviewer is your `actor`, the result's `id` is the finding (§2); then `log_work`. Never move a
+  status
+
 **Scope your reading to the tickets that asked for review.** The plan's `## Assurance` table (and
 each ticket's `## Assurance` lines) records, per ticket, whether review is `full`, `focused` on
 named lenses, or `none`. You are running because your lens was kept for at least one ticket. Review

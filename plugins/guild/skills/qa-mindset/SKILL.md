@@ -63,7 +63,9 @@ characterization while refusing to canonize defects.
 
 1. Internal specs — the requirement rows and the `doc` library on the board
    (`SELECT id, title FROM requirement`; `SELECT body FROM requirement WHERE id = 'REQ-NNN'`;
-   `SELECT slug, title FROM doc`). Load `guild:warehouse` for how to read them safely
+   `SELECT slug, title FROM doc`). Load `guild:warehouse` for how to read them safely — on
+   `backend: kumiai` the same reads are `list requirement`, `get requirement` and
+   `read_view v_doc_current`
 2. External board — Linear / Jira / etc. via an MCP connector, *if configured*
 3. Code + the running app — inferred intent
 4. The user — for what stays ambiguous. You can't call `AskUserQuestion` yourself
