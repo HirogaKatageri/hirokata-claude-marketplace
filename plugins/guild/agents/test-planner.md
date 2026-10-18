@@ -2,7 +2,7 @@
 name: test-planner
 model: sonnet
 color: yellow
-tools: ["Read", "Grep", "Glob", "Write", "Edit", "Bash"]
+tools: ["Read", "Grep", "Glob", "Write", "Edit", "Bash", "mcp__kumiai__*"]
 capabilities: [test-planning]
 serial: false
 description: |
@@ -30,6 +30,21 @@ export PATH="$HOME/.turso:$PATH"
 DB=.guild/guild.db          # cloud boards: see the skill's Connect section
 T=TASK-NNN
 ```
+
+**Backend.** Read `backend:` in `.guild/config.yaml` — absent means `local`, and the dispatch prompt
+names it too. Every SQL block in this file is the local path. On `kumiai` the same board is a Kumiai
+workspace: use the `mcp__kumiai__*` tools per `guild:warehouse` → `references/kumiai.md`, pass
+`workspace` from the config and `actor: "test-planner"` on every write, send free text as plain
+strings (no hex), and never open `.guild/guild.db`. If no `mcp__kumiai__*` tool is available to you,
+report failed and say so — never fall back to `tursodb`. Your calls:
+
+- read: `get task` / `get requirement` / `get plan`, `list work_log where {task_id}`; the
+  implementation inventory is `list task where {requirement_id, node_key: "implement"}` and
+  `list work_log where {task_id: [those ids]}` (§0)
+- write the test plan: `create_plan {requirement, task: "$T", title, body}`; a correction is
+  `update_plan {key, body}` (§1 *Plan*)
+- each test-writer ticket is ONE `create_task` carrying `plan`, `files` and `capabilities`
+  (§1 *Task*); then `log_work` (§2). Never move a status
 
 One addition specific to you: a test plan is full of quoted code, so encode the whole document
 from a **file**, never a variable — `hex=$(xxd -p < plan.md | tr -d '\n')`.

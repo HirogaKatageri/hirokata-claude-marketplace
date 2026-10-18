@@ -13,6 +13,8 @@ A `cadence` pass skips full re-planning and asks the board what is due:
 SELECT id, area, risk, interval_days, days_since, spec_path FROM v_coverage_due;
 ```
 
+(kumiai: `read_view {view: "v_coverage_due"}`.)
+
 `days_since` is **NULL for an area nobody has ever inspected** — that is not "0 days ago", and
 reporting it as such lies about the state of the product.
 

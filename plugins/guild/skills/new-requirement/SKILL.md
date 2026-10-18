@@ -10,7 +10,7 @@ description: >
   implementation plan, the developer/test-planner/reviewer tickets, and the
   requirement's execution graph — and ends at `gate-plan`, where the guild
   master approves the plan before anything is built.
-version: 5.0.0
+version: 5.1.0
 user-invocable: true
 arguments:
   - name: title
@@ -34,6 +34,13 @@ and moderate its own interview loop in turn.
 below is SQL. The canonical statements — creating a requirement, a plan, a ticket with
 its capabilities, instantiating a graph — are in `guild:warehouse` → `references/queries.md`;
 copy from there rather than improvising.
+
+**Backend.** `backend:` in `.guild/config.yaml` — absent means `local`, and every SQL block here
+is the local path. On `kumiai` each is a tool call against `workspace` from the config, mapped
+section by section in `guild:warehouse` → `references/kumiai.md`; the line under each block names
+it. **Both dispatch prompts below carry the backend**, because the project-manager and the
+strategist write the requirement, the plan, the tickets and the graph themselves, and a subagent
+that guesses the backend writes them to the wrong board.
 
 **Reference — load on demand:** `references/roster-gap.md` — the full recruiting procedure for
 Step 8.5, only needed when the strategist's `NEEDS INPUT:` opens with `ROSTER GAP`.
@@ -102,6 +109,8 @@ SELECT id, goal_id, ordinal, status, priority, concurrent, isolation, title
 SELECT id, why, isolation, title FROM v_projects_runnable;
 ```
 
+(kumiai: `read_view` on `v_goal_progress`, `v_project_progress` and `v_projects_runnable`.)
+
 Nothing back means the guild has no direction yet. That is normal on a young board and is
 **not** a problem to fix before proceeding.
 
@@ -140,7 +149,8 @@ line would split the statement). It then reports the REQ id back to you, and eve
 downstream uses that id.
 
 You can show the user what number it will land on, but the id is derived inside the INSERT
-itself, so it is indicative only:
+itself, so it is indicative only. (On `kumiai` the server assigns the key at create and there is
+no preview — say nothing about the number until the project-manager reports it.)
 
 ```sql
 SELECT 'REQ-' || printf('%03d', COALESCE(MAX(CAST(substr(id, instr(id,'-')+1) AS INTEGER)), 0) + 1)
@@ -156,9 +166,11 @@ cross-talk to set up:
 Agent(
   subagent_type: "guild:project-manager",
   prompt: "You're gathering requirements for a new feature — \"{title}\". Load the
-           guild:warehouse skill: there is no CLI, you write SQL. There is NO requirement
-           row yet — compose the document, then create it yourself with the INSERT in
-           queries.md §1 (body as CAST(x'<hex>' AS TEXT)) and report the REQ id it returns.
+           guild:warehouse skill: there is no CLI. BACKEND: {local | kumiai — workspace
+           {id}}. There is NO requirement row yet — compose the document, then create it
+           yourself (local: the INSERT in queries.md §1, body as CAST(x'<hex>' AS TEXT);
+           kumiai: create_requirement per kumiai.md §1, body as a plain string, your name
+           as actor — never tursodb) and report the REQ id it returns.
            Seed description: {description}. Today's date: {today}.
            Current direction (Step 2.5): {one line per goal and project, or 'none declared yet'}.
            End your report with a one-line Placement proposal — an existing PROJ id, a new
@@ -213,6 +225,11 @@ does not need a goal.
 
 **Rules for this step:**
 
+On `kumiai` the four writes are `update_requirement {key, project}`, `create_project` (leave
+`ordinal` out — the server takes the next in the goal), `create_goal` then `create_project`, or
+nothing; the follow-ups are `update_project {concurrent: true}` or `update_project {isolation:
+"worktree", worktree_path: ".worktrees/PROJ-NNN"}`, both columns in one call (`kumiai.md` §1).
+
 - **Unaffiliated is a first-class choice, not a failure.** `project_id` is nullable by design and
   a later `UPDATE … SET project_id = NULL` detaches one, so nothing here is permanent. Record it
   and move on — no warning, no "are you sure", no second ask.
@@ -246,8 +263,12 @@ concurrently-running project-manager — there isn't one:
 Agent(
   subagent_type: "guild:strategist",
   prompt: "You're planning for a new feature — \"{title}\". The requirement is final: it is
-           {REQ} — read it with `SELECT body FROM requirement WHERE id = '{REQ}'`.
-           Load the guild:warehouse skill: there is no CLI, you write SQL.
+           {REQ} — read its body (local: `SELECT body FROM requirement WHERE id = '{REQ}'`;
+           kumiai: `get {type: requirement, key: {REQ}}`).
+           Load the guild:warehouse skill: there is no CLI. BACKEND: {local — you write
+           SQL against .guild/guild.db | kumiai — workspace {id}: use the mcp__kumiai__*
+           tools per references/kumiai.md, your name as actor, never tursodb; the graph is
+           ONE instantiate_graph call}.
            It lands on {PROJ-NNN, isolation: worktree|shared | 'no project — unaffiliated'};
            goals and projects are the guild master's, so never insert one.
            The roster ({N} members) is: {name: [capabilities], ...} — read from the agent
@@ -286,8 +307,25 @@ The same loop as Step 5, now for the strategist alone:
 
 **It reports done:** it reports the PLAN id, the ticket ids and their file sets, and **the
 graph** — which template, how many nodes, and every deviation with its reason. It wrote all of
-that itself; you do not re-create any of it. Go to Step 9 and check the graph yourself before
-you take anything to the user.
+that itself; you do not re-create any of it.
+
+**Then make the moves its report names — the strategist moves no status, so you do.** The
+orchestrator owns every status transition with no exceptions, and the strategist's report carries
+the outcomes that need one. Run these as `orchestrator`, before Step 9:
+
+| The report says | Your move |
+|---|---|
+| `plan PLAN-NNN written` | `UPDATE plan SET status = 'done' WHERE id = 'PLAN-NNN' AND requirement_id = 'REQ-NNN' AND status <> 'done' RETURNING id, status, approval;` — this approves **nothing**; `approval` stays `pending` until Step 10 (kumiai: `update_plan {actor: "orchestrator", key, status: "done", expect_status: ["todo", "in-progress"]}`) |
+| `doc <new> supersedes <old>: <reason>` | steps 2 and 3 of `guild:warehouse` → `queries.md` §1 *Superseding a decision* — the `supersedes` edge with the reason as its note, then the old doc to `superseded` (kumiai: `supersede_doc {actor: "orchestrator", old_slug: "<old>", new: {slug: "<new>"}, note: "<reason>"}`, no title or body) |
+| `skip REQ-NNN/<node> — deviation recorded` (an assurance skip) | `UPDATE graph_node SET status = 'skipped' WHERE id = 'REQ-NNN/<node>' AND status = 'pending' RETURNING id, status;` after confirming a `graph_deviation` row exists for that key (kumiai: `set_node_status {actor: "orchestrator", node, status: "skipped", expect_status: "pending"}`) |
+
+```sql
+UPDATE guild_state SET value = 'orchestrator' WHERE key = 'actor';
+```
+
+A report that says the plan is written but names no PLAN id, or a supersession whose slugs do not
+both exist, is a message back to the strategist — not a move you guess at. Then go to Step 9 and
+check the graph yourself before you take anything to the user.
 
 ### 8.5. Recruiting — the Strategist Hit a Roster Gap
 
@@ -321,6 +359,11 @@ SELECT t.id, COALESCE(t.agent,'') AS pin, w.who, t.title
   FROM task t JOIN v_task_who w ON w.task_id = t.id
  WHERE t.requirement_id = 'REQ-NNN' ORDER BY t.id;
 ```
+
+On `kumiai` (`kumiai.md` §4 *Reading a requirement's graph back*): `list` on `graph_node`,
+`graph_edge`, `gate` and `graph_deviation`, each with `where: {requirement_id: "REQ-NNN"}`;
+`read_view v_ready_nodes where {requirement_id}`; and `read_view v_task_who` with `get task` for
+the pin.
 
 Then check every unpinned ticket's `who` against the roster — `needs:implement+svelte` becomes
 `--covers implement,svelte`. **No SQL can do this for you**, and a ticket nobody covers is the
@@ -398,7 +441,7 @@ the plan, as part of the same decision.
 | **Approve** | the three-write approval below | The plan is committed. `/guild:check-in` runs the first batch |
 | **Reject** | the same, with `'rejected'` throughout and the node to `'skipped'` | Nothing gets built. The plan and the graph stay on the board as the record of what was proposed and refused |
 | **Not yet / let me think** | nothing | The gate stays `pending`. Check-in will present it again |
-| **Approve, but change the assurance** (e.g. "review the article too", "skip tests for that one") | **nothing yet** — resume the strategist with the change, let it create or waive the ticket and rewrite the plan's Assurance table and deviation rows, then present again | Assurance is the strategist's call and the guild master's veto. A step the guild master puts back is flipped `skipped` → `pending` by you after the ticket exists; a step they remove is marked `skipped` with a deviation row |
+| **Approve, but change the assurance** (e.g. "review the article too", "skip tests for that one") | **nothing yet** — resume the strategist with the change, let it create or waive the ticket and rewrite the plan's Assurance table and deviation rows, then present again | Assurance is the strategist's call and the guild master's veto. A step the guild master puts back is flipped `skipped` → `pending` by you after the ticket exists; a step they remove is marked `skipped` by you, from the strategist's `skip …` report line, once its deviation row exists |
 
 ```sql
 PRAGMA foreign_keys = ON;
@@ -423,6 +466,18 @@ UPDATE plan SET approval = 'approved',
  WHERE requirement_id = 'REQ-NNN' AND task_id IS NULL AND approval = 'pending'
 RETURNING id, approval;
 ```
+
+**On `kumiai` the three writes are one transaction** (`kumiai.md` §1 *Plan*, §4 *Resolve a gate*):
+
+1. `read_view v_ready_nodes where {id: "REQ-NNN/gate-plan"}` must return the row.
+2. `list plan where {requirement_id: "REQ-NNN", task_id: {op: "is_null"}, approval:
+   "pending"}` — the requirement's own plan, not the test plan.
+3. `resolve_gate {node: "REQ-NNN/gate-plan", status: "approved", decision: "<their words>",
+   plan: "PLAN-NNN"}` — links the plan to the gate, and sets the gate, the node and
+   `plan.approval` with `approved_by = 'user'` (the `decided_by` default), together.
+
+On reject, the same with `status: "rejected"`: the node goes `skipped`, the plan `rejected` and
+back to `in-progress`, in the same call.
 
 **Setting `gate.status` does not move the node, and it does not approve the plan either** —
 approving is always **three** writes. The second is what makes `implement` ready; the third is
@@ -498,8 +553,9 @@ Run `guild:validate new-requirement` before you report. §4 of `docs/expectation
 what this skill is for: §4.a that nothing moved and nothing was claimed, §4.b that
 `v_ready_nodes` offers **exactly one** row and it is `gate-plan`, §4.c the node/edge/gate
 arithmetic (`N+10`, `2N+11`, `2`), §4.d the plan, its tickets and the four-way review fan-out.
-**Report every failure with its rows.** A silently torn INSERT exits `1` and looks like
-success — §4.b is the strongest single statement that nothing can be built yet.
+**Report every failure with its rows.** On `kumiai` it runs server-side as
+`check_invariants {process: "new-requirement", requirement: "REQ-NNN"}`. A silently
+torn INSERT exits `1` and looks like success — §4.b is the strongest single statement that nothing can be built yet.
 
 ## Rules — at a glance
 
@@ -508,7 +564,9 @@ Each is argued in full where it first applies above; this is the checklist, not 
 - IDs are derived inside the INSERT — never hand-assign or zero-pad one yourself.
 - Free text crosses as hex, always — a requirement or plan body quotes code and a bare `;`
   would split the statement.
-- Status is a COLUMN; everything created starts at `todo` and only the orchestrator moves it.
+- Status is a COLUMN; everything created starts at `todo` and only the orchestrator moves it —
+  including the plan's `done` and a superseded ADR, which the strategist reports and you move
+  (Step 8).
 - Documents are written at creation — `body` is the whole write surface, there is no file.
 - This skill does not return until planning is complete — gathering and planning both happen
   here, live.

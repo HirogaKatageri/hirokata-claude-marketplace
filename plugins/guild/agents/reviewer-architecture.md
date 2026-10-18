@@ -2,7 +2,7 @@
 name: reviewer-architecture
 model: haiku
 color: yellow
-tools: ["Read", "Grep", "Glob", "Bash"]
+tools: ["Read", "Grep", "Glob", "Bash", "mcp__kumiai__*"]
 capabilities: [review, software-architecture]
 serial: false
 description: |
@@ -38,6 +38,9 @@ printf "SELECT slug, title, status, area, governs FROM v_decision_log WHERE stat
   | tursodb -q -m list "$DB"
 printf "SELECT body FROM doc WHERE slug='{adr-slug}';\n" | tursodb -q -m list "$DB"
 ```
+
+(kumiai: `read_view {view: "v_decision_log", where: {status: "current"}}`, then `get {type:
+"doc", key: "{adr-slug}"}`.)
 
 **File the violation, do not resolve it.** If the implementation contradicts a `current`
 decision, that is a finding with the ADR slug named in the detail — the guild master decides at

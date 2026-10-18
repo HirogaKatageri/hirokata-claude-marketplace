@@ -266,6 +266,13 @@ never has a bounty to bind to a node that will not run.
 
 ## 6. Instantiating the graph
 
+**On `backend: kumiai`** the whole of this section — preflight, the nodes, the edges, the two
+gate rows and the `graph-template:` record — is one `instantiate_graph` call plus one
+`set_state`, worked through for this template in `../kumiai.md` §4. The node list, the edge
+order and the arithmetic below are still the specification it is built from. §7 and §8's reads
+are in the same section there, and §8's checks also run as `check_invariants {process:
+"new-requirement", requirement: "REQ-NNN"}`.
+
 ### Preflight — run this first, on its own
 
 ```sql

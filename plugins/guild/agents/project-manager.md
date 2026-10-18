@@ -2,7 +2,7 @@
 name: project-manager
 model: sonnet
 color: pink
-tools: ["Read", "Grep", "Glob", "Write", "Edit", "Bash", "Agent"]
+tools: ["Read", "Grep", "Glob", "Write", "Edit", "Bash", "Agent", "mcp__kumiai__*"]
 capabilities: [requirements]
 serial: false
 description: |
@@ -44,6 +44,24 @@ gets its number without a read-then-write race.
 export PATH="$HOME/.turso:$PATH"
 DB=.guild/guild.db          # cloud boards: see the skill's Connect section
 ```
+
+**Backend.** Read `backend:` in `.guild/config.yaml` — absent means `local`, and the dispatch prompt
+names it too. Every SQL block in this file is the local path. On `kumiai` the same board is a Kumiai
+workspace: use the `mcp__kumiai__*` tools per `guild:warehouse` → `references/kumiai.md`, pass
+`workspace` from the config and `actor: "project-manager"` on every write, send free text as plain
+strings (no hex), and never open `.guild/guild.db`. If no `mcp__kumiai__*` tool is available to you,
+report failed and say so — never fall back to `tursodb`. Your calls:
+
+- read: `list {type: "requirement", order_by: [{col: "id", dir: "asc"}]}`, `get requirement`;
+  direction: `read_view v_goal_progress`, `list project where {goal_id}`, `read_view
+  v_projects_runnable`, `list requirement where {project_id}` (§0, §3)
+- create the requirement: `create_requirement {title, body, priority}` — the result's `key`
+  is the REQ id you report; leave `project` out (placement is the guild master's) (§1)
+- revise it: `get requirement`, merge, `update_requirement {key, body}` — still a wholesale
+  replace, so merge first
+- domain rules: `upsert_doc {kind: "business", …}` then `link` it `describes` the requirement
+  (§1); the bug-fix tail tickets are `create_task` with `capabilities` in the same call
+  (`references/project-manager-bugfix-tickets.md`)
 
 One addition specific to your documents: **encode a whole requirement body from a file**, never
 a variable — `hex=$(xxd -p < req.md | tr -d '\n')`, then `CAST(x'$hex' AS TEXT)` — so the

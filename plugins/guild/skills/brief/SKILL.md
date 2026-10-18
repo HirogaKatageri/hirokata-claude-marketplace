@@ -9,7 +9,7 @@ description: >
   real briefing — direction, what is in flight, the open bugs, which tickets
   failed and why, the unresolved review findings, what moved since the last
   check-in, and what to do next — without starting a work session.
-version: 6.0.0
+version: 6.1.0
 user-invocable: true
 ---
 
@@ -36,6 +36,9 @@ No guild board found. Run /guild:check-in to initialize and start your first wor
 
 ## Step 2 — read the board
 
+**Which backend?** `backend:` in `.guild/config.yaml` — absent means `local`, and the script
+below is the local path. On `kumiai`, skip to *On kumiai* after it.
+
 One script, one round trip — `scripts/brief.sql`, checked in rather than retyped, so there is
 no risk of a transcription slip in a query the daily flow also relies on:
 
@@ -51,6 +54,28 @@ Two things about that script, both deliberate:
   escapes control characters, so one row is always one line.
 - **The `'## …'` markers** are how you tell the blocks apart in one flat stream. A missing
   marker never happens; a marker with nothing after it means that section is empty.
+
+### On kumiai — the same blocks, one `read_view` each
+
+`brief.sql` is still the specification: run its blocks, in its order, as tool calls against
+`workspace` from the config (`guild:warehouse` → `references/kumiai.md` §0, §3). Each block's
+rows are JSON already, so the `json_object` and the `'## …'` markers have nothing left to do —
+keep the block names, they are what Step 3 reads.
+
+| block | call |
+|---|---|
+| `brief` | `read_view {view: "v_brief"}` |
+| `direction` | `read_view {view: "v_goal_progress"}` |
+| `projects` | `read_view {view: "v_projects_runnable"}` |
+| `requirements` | `read_view {view: "v_requirement_progress", where: {status: {op: "<>", value: "done"}}}` |
+| `in-flight` · `bounties` · `blocked` · `bugs` · `failed` · `findings` · `coverage` | `read_view` on `v_in_flight`, `v_open_bounties`, `v_blocked_tasks`, `v_open_bugs`, `v_failed_tasks`, `v_open_findings`, `v_coverage_due` |
+| `docs-stale` · `undocumented` | `read_view` on `v_doc_stale`, `v_undocumented_work` |
+| `gates` · `approvals` | `read_view` on `v_gates_pending`, `v_plans_pending_approval` |
+| `moved` | `get_state {key: "last-checkin"}`, then `read_view {view: "v_recent_activity", where: {ts: {op: ">=", value: <cutoff>}}, order_by: [{col: "ts", dir: "desc"}], limit: 30}` — no `where` when the cutoff is `"null"` |
+
+Free text arrives as JSON strings, so a newline in a title cannot forge a row. `coverage`'s
+`days_since` arrives as `null` for a never-inspected area — that is the `-1` the local script
+substitutes, and it still means **never**, not 0. Every call is a read; none of them writes.
 
 **One script is the whole briefing.** If a section is empty, that is the answer — do not run a
 second query to "check" it. **Do not widen this to a window the user did not ask for.** The
@@ -197,7 +222,8 @@ does not hold** in one line at the end of the briefing; never repair it silently
 
 ## Rules
 
-- **Read-only.** Every statement is a `SELECT`. Never `UPDATE`, `INSERT`, `DELETE`, never
+- **Read-only.** Every statement is a `SELECT` (kumiai: every call is `read_view`, `get`,
+  `list` or `get_state` — never a tool that writes). Never `UPDATE`, `INSERT`, `DELETE`, never
   stamp `last-checkin`, never write an `agents/*.md` file, and never open the database file
   with anything but `tursodb`. In particular **never mark a ticket `blocked` from here**, even
   when you can see nobody covers it — that is a decision, and check-in makes it.
@@ -206,7 +232,8 @@ does not hold** in one line at the end of the briefing; never repair it silently
   `task_dependency` gives the guild a second answer to a question that already has one.
 - **Never invent a number.** Every figure comes from the rows. If the user asks something these
   do not answer, say so and name the query that would (`SELECT body FROM requirement WHERE id =
-  'REQ-001'`, `SELECT detail FROM review_finding WHERE id = 7`).
+  'REQ-001'`, `SELECT detail FROM review_finding WHERE id = 7`; kumiai: `get {type: "requirement",
+  key: "REQ-001"}`).
 - **Free text is free text.** Titles can contain pipes and newlines. Read them through
   `json_object`, or as the only column in the statement, and never `cut -d'|'` a result.
 - **Do not paste the rows and call it a briefing.** The rows are evidence; the narration is the

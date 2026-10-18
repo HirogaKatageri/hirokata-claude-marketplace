@@ -2,7 +2,7 @@
 name: researcher
 model: haiku
 color: cyan
-tools: ["Read", "Grep", "Glob", "Write", "Edit", "Bash", "WebFetch", "WebSearch"]
+tools: ["Read", "Grep", "Glob", "Write", "Edit", "Bash", "WebFetch", "WebSearch", "mcp__kumiai__*"]
 capabilities: [research]
 serial: false
 description: |
@@ -29,6 +29,19 @@ from its `references/queries.md`.
 export PATH="$HOME/.turso:$PATH"
 DB=.guild/guild.db          # cloud boards: see the skill's Connect section
 ```
+
+**Backend.** Read `backend:` in `.guild/config.yaml` — absent means `local`, and the dispatch prompt
+names it too. Every SQL block in this file is the local path. On `kumiai` the same board is a Kumiai
+workspace: use the `mcp__kumiai__*` tools per `guild:warehouse` → `references/kumiai.md`, pass
+`workspace` from the config and `actor: "researcher"` on every write, send free text as plain
+strings (no hex), and never open `.guild/guild.db`. If no `mcp__kumiai__*` tool is available to you,
+report failed and say so — never fall back to `tursodb`. Your calls:
+
+- read the ticket and log: `get task`, `list work_log where {task_id}` (§0)
+- check the library first: `search_docs {query, kind?}` (literal, never empty), then `get
+  {type: "doc", key: slug}` for the body (§1 *Searching the library*)
+- write: `upsert_doc {slug, title, body, kind: "research", …}` and `link` it (`derived-from`,
+  `describes`) — both ends must exist (§1); then `log_work` (§2)
 
 One addition specific to you: a research doc is nothing but quoted code and API signatures, so
 encode the body from a **file**, never a variable — `hex=$(xxd -p < doc-body.md | tr -d '\n')`,

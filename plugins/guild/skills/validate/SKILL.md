@@ -8,9 +8,9 @@ description: >
   did matches what was required. Runs the SQL assertions in docs/expectations.md
   against the live board — the global invariants by default, a named process's
   postconditions on request — and reports every failure with the offending rows.
-version: 1.0.0
+version: 1.1.0
 user-invocable: true
-allowed-tools: Bash(tursodb *)
+allowed-tools: Bash(tursodb *), mcp__kumiai__*
 ---
 
 # Validating the guild
@@ -48,6 +48,42 @@ with every other global.
 
 `<name>` is one of `empty`, `planned`, `in-flight`, `review-ready`, `messy`, `maintenance` —
 `docs/expectations-fixtures.md`.
+
+## Which backend
+
+`backend:` in `.guild/config.yaml` — absent means `local`, and everything below *Running it*
+is the local path. **On `kumiai` the assertions run server-side**: Kumiai implements the same
+`docs/expectations.md` against its Postgres copy of the warehouse, so this skill extracts
+nothing and calls one tool instead:
+
+```json
+check_invariants {"workspace": "<ws>"}                            // validate            → §3
+check_invariants {"workspace": "<ws>", "process": "check-in"}     // validate <process> → §3 + its section
+check_invariants {"workspace": "<ws>", "process": "new-requirement", "requirement": "REQ-007"}
+→ {"ok": false,
+   "failures": [{"id": "G5", "description": "ticket routing",
+                 "rows": [["no-pin-no-capabilities", "TASK-010", "todo"]]}],
+   "checked": ["G1", …], "skipped": [{"id": "P4.b", "reason": "…"}, …]}
+```
+
+`process` takes the same names as the table above; `new-requirement` also needs `requirement`
+(§4 is per requirement — `VALIDATION` without it). `failures[].rows` are the offending rows the
+SQL would have printed — report them **verbatim**, in the same report shape as below, and name the
+target as the Kumiai workspace rather than `.guild/guild.db`. `ok: true` with no failures is the
+zero-rows pass. A failure carrying `"advisory": true` (§9.c) leaves `ok` true — report it as the
+warning it is. `skipped` lists every assertion that stays local, with its reason: report those as
+*not run here*, never as passed.
+
+What does not move to the server, because it is not on the board:
+
+- **§6 (dashboard)** asserts over the built `.guild/dashboard.html`, and **§11.f** over git. Run
+  those blocks locally exactly as written — they are `grep` and `git`, not board SQL.
+- **§4's `REQ-NNN`** is the `requirement` parameter: `check_invariants {process:
+  "new-requirement", requirement: "REQ-007"}`.
+- **§9.a's before/after fingerprint** is `fingerprint {workspace}`, taken by `guild:release`
+  before its writes and after; this skill compares the two the release hands it.
+- **`--fixture`** stays local in both backends — fixtures are SQL seeds, and they load into a
+  scratch `tursodb` file, never into a Kumiai workspace.
 
 ## The shape every assertion has
 

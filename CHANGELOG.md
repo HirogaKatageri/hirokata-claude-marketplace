@@ -33,11 +33,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matched by capability. A hand-written ticket requiring `architecture` is the one board that could
   be affected; `SELECT task_id, capability FROM task_capability WHERE capability = 'architecture'`
   finds it.
-- Versions: guild **8.1.0 → 9.3.0**; marketplace **7.1.1 → 8.3.0**. Full detail, including the
+- Versions: guild **8.1.0 → 9.4.0**; marketplace **7.1.1 → 8.4.0**. Full detail, including the
   8.1.1 and 8.1.2 releases folded into this jump, the 9.1.1 markdown-mirror removal, the 9.2.0
-  interview/skill changes and the 9.3.0 assurance assessment below, is in [`plugins/guild/CHANGELOG.md`](plugins/guild/CHANGELOG.md).
+  interview/skill changes, the 9.3.0 assurance assessment and the 9.4.0 Kumiai backend below, is in [`plugins/guild/CHANGELOG.md`](plugins/guild/CHANGELOG.md).
 
 ### Changed
+- **Guild Plugin v9.4.0 — a second backend: Kumiai.** `backend: kumiai` in `.guild/config.yaml`
+  puts the board in a shared Kumiai workspace, reached through a project-scoped MCP server named
+  `kumiai`, against the versioned guild ↔ Kumiai contract; absent `backend` means `local`, and the
+  local SQL path is unchanged. First check-in asks which backend, `guild:warehouse` reads it first,
+  a new `references/kumiai.md` maps every `queries.md` section to its tool call, and every
+  board-touching agent grants `mcp__kumiai__*` (skills that already pre-approved `tursodb`
+  pre-approve it too). The server is
+  deliberately not shipped in the plugin's `.mcp.json`, so local users get no auth prompt. No schema
+  or migration change; the Kumiai path is not yet verified against a live server. Detail in
+  [`plugins/guild/CHANGELOG.md`](plugins/guild/CHANGELOG.md).
 - **Guild Plugin v9.3.0 — testing and review are decided per piece of work, not assumed.** The
   strategist assesses each ticket first: does running something catch a defect in it (`tests`,
   `checks`, `none`), and would a second reader (`full`, `focused`, `none`)? A step ruled out is kept

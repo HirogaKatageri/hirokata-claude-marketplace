@@ -971,8 +971,11 @@ WHERE NOT EXISTS (SELECT 1 FROM requirement WHERE id = 'REQ-900');
 -- MOVED, not inserted at its end state: the status trigger is what writes the `moved` event,
 -- and G7 asserts every non-`todo` requirement has one. Seeding straight to 'in-progress'
 -- produces a board with no history of it happening — the exact shortcut G7 exists to catch.
+-- The move is the orchestrator's (guild:qa does it), so it carries that actor — §7 C.b.
+UPDATE guild_state SET value = 'orchestrator' WHERE key = 'actor';
 UPDATE requirement SET status = 'in-progress', updated_at = '2026-08-03T08:00:00Z'
  WHERE id = 'REQ-900' AND status = 'todo';
+UPDATE guild_state SET value = 'strategist' WHERE key = 'actor';
 
 INSERT INTO coverage (id, area, risk, spec_path, last_inspected_at, notes) VALUES
   ('checkout-flow', CAST(x'436865636b6f757420666c6f77' AS TEXT), 'high', 'e2e/checkout.spec.ts',

@@ -2,7 +2,7 @@
 name: reviewer-edge-case
 model: haiku
 color: magenta
-tools: ["Read", "Grep", "Glob", "Bash"]
+tools: ["Read", "Grep", "Glob", "Bash", "mcp__kumiai__*"]
 capabilities: [review, edge-case]
 serial: false
 description: |

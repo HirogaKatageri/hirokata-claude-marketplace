@@ -146,6 +146,10 @@ ON CONFLICT(id) DO UPDATE SET
 RETURNING id, spec_path;
 ```
 
+(kumiai: `upsert_coverage {id: "checkout", spec_path: "e2e/checkout/place-order.spec.ts"}` —
+a patch, so the area, risk and notes you do not send are kept, and the warning below is the
+local path's.)
+
 Read the row first and pass its current `area`, `risk` and `notes` back through — `DO UPDATE SET`
 overwrites every column it names, so an upsert that guessed at `area` is an upsert that renames
 an area by omission.

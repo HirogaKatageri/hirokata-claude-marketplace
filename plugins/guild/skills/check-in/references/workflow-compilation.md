@@ -30,7 +30,8 @@ Three properties the compiler depends on:
   members may share a concurrent batch.
 - **`task` and `agent` may be empty.** An unbound node is ordinary — the strategist binds a
   ticket only where the correspondence is unambiguous. You resolve those yourself (3.3) and
-  record the binding with `UPDATE graph_node SET status='running', task_id='TASK-NNN'`.
+  record the binding with `UPDATE graph_node SET status='running', task_id='TASK-NNN'`
+  (kumiai: `set_node_status` with `task`).
 
 ---
 
@@ -79,7 +80,8 @@ await pipeline([
 
 ### `dispatch(node)` — what goes in the prompt
 
-The same prompt SKILL.md Step 3.3 uses. Compose it in the orchestrator, not in the workflow:
+The same prompt SKILL.md Step 3.3 uses — **including its `BACKEND:` line**, because a
+workflow-dispatched agent has no other way to learn which board it is on. Compose it in the orchestrator, not in the workflow:
 resolving the member is the pin/capability rule in check-in §3.3, and the ticket move must happen
 before the agent starts.
 
@@ -122,5 +124,9 @@ SELECT json_object('ts', ts, 'agent', agent, 'entry', entry)
 - A node left `running` **holds everything behind it** — deliberately. That is why a crash
   produces a stalled segment rather than a review of half-written code.
 
-Repairing a crash is ordinary SQL, but keep it to the two status columns. Editing rows to
+On `kumiai` the same two reads are `list graph_node where {requirement_id}` and
+`list work_log where {task_id}`.
+
+Repairing a crash is ordinary SQL (kumiai: `set_task_status` / `set_node_status`), but keep it
+to the two status columns. Editing rows to
 make the board *look* consistent invents history the `event` feed will contradict.

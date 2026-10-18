@@ -2,7 +2,7 @@
 name: reviewer-business-logic
 model: haiku
 color: orange
-tools: ["Read", "Grep", "Glob", "Bash"]
+tools: ["Read", "Grep", "Glob", "Bash", "mcp__kumiai__*"]
 capabilities: [review, business-logic]
 serial: false
 description: |

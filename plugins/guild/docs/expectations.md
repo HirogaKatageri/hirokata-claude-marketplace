@@ -61,6 +61,22 @@ out=$(tursodb .guild/guild.db < assertion.sql)
 Run **§3 (global invariants) after every skill, always.** Run the skill's own process section
 after that skill specifically.
 
+**On the Kumiai backend these assertions run server-side.** A project whose
+`.guild/config.yaml` says `backend: kumiai` has no `guild.db` to point them at. Kumiai implements
+this document against its own copy of the warehouse — same rules, same breach tokens — and serves
+it as one tool, `check_invariants {workspace, process?, requirement?}`, which returns `{ok,
+failures: [{id, description, rows}], checked, skipped}` (`requirement` is the §4 `REQ-NNN`, and
+`skipped` names what stays local). `rows` are the rows the SQL below would have printed, so *any failure at
+all* is still a failure and still names its cause. `guild:validate` calls it.
+
+That makes **this file the specification on both backends** and the SQL the executable form on
+one of them: a change to an assertion here is a change Kumiai has to mirror, and until it does,
+the two backends are checking different rules. Three kinds of assertion never move to the server,
+because they are not about the board: §6 checks the built `dashboard.html` and §11.f checks git.
+§9.a's before/after comparison uses Kumiai's `fingerprint` tool in place of the SQL fingerprint.
+The fixtures in `expectations-fixtures.md` are SQL seeds and load into a scratch `tursodb`
+file only.
+
 ### Why the check cannot be skipped: the exit code is not evidence
 
 The most important thing to understand before trusting any member's report of success. The
@@ -677,8 +693,9 @@ Two clauses, two different failures:
 - **A `current` doc with an inbound `supersedes` edge** is a cosmetic drift, not a broken read:
   `v_doc_current` already hides such a page, so no reader is misled. It fires because the two
   writes that retire a decision (the edge, then the status) are the same shape as the two writes
-  that resolve a gate, and the second one gets forgotten the same way. Fix it with
-  `UPDATE doc SET status = 'superseded'`.
+  that resolve a gate, and the second one gets forgotten the same way. Both are the orchestrator's,
+  made together from a member's `doc <new> supersedes <old>` report; fix it with
+  `UPDATE doc SET status = 'superseded'` as `orchestrator`.
 
 **The second clause is deliberately not the reverse.** A `superseded` doc with *no* inbound edge
 is legitimate — a page can be retired because it is simply wrong, with nothing replacing it.
@@ -1624,6 +1641,7 @@ SELECT 'claimed-against-its-own-pin' AS breach, t.id AS row_id,
    AND t.agent <> 'reviewer' AND t.claimed_by <> t.agent
 UNION ALL
 -- C.b  a status transition whose actor is neither the orchestrator nor the guild master
+--      (on every subject: only the orchestrator moves status, a member reports and it moves)
 SELECT 'status-moved-by-non-orchestrator', e.subject_type || ':' || e.subject_id, e.actor
   FROM event e
  WHERE e.verb IN ('moved','node-moved','decided','claimed')
@@ -1714,7 +1732,12 @@ with `actor = 'user'` and which appears in the feed as
 `user | decided | gate | REQ-001/gate-plan | pending -> approved`. Everything else must be
 `orchestrator`. Note what it does **not** cover: `created`, `logged` and `found` are agents' own
 writes and are legal from any actor — an agent filing a `bug` mid-run is the collect-don't-escalate
-rule working.
+rule working. C.b has **no subject filter, by design**: there is no status a member moves. A
+`plan` the strategist wrote, a `bug` a qa-tester re-verified, a `doc` the librarian superseded —
+each member *reports* that outcome in its final message (`plan PLAN-003 written`, `BUG-004
+re-verified fixed`, `doc adr-x-v2 supersedes adr-x`) and the skill that spawned it makes the move
+as `orchestrator`. A `moved` event on a `plan`, `bug`, `doc`, `coverage` or any other subject with a
+member as its actor is the same breach as a member closing its own ticket.
 
 **§7.c — C.f is a wrap-up-only assertion.** Between sessions, `last-checkin` is *supposed* to be
 older than the newest event, so running C.f on an idle board fires by design. Run it once,

@@ -2,7 +2,7 @@
 name: developer-svelte
 model: sonnet
 color: orange
-tools: ["Read", "Grep", "Glob", "Write", "Edit", "Bash", "Skill"]
+tools: ["Read", "Grep", "Glob", "Write", "Edit", "Bash", "Skill", "mcp__kumiai__*"]
 capabilities: [implement, frontend, svelte, sveltekit]
 serial: false
 skills:
@@ -48,6 +48,19 @@ export PATH="$HOME/.turso:$PATH"
 DB=.guild/guild.db          # cloud boards: see the skill's Connect section
 T=TASK-NNN
 ```
+
+**Backend.** Read `backend:` in `.guild/config.yaml` — absent means `local`, and the dispatch prompt
+names it too. Every SQL block in this file is the local path. On `kumiai` the same board is a Kumiai
+workspace: use the `mcp__kumiai__*` tools per `guild:warehouse` → `references/kumiai.md`, pass
+`workspace` from the config and `actor: "developer-svelte"` on every write, send free text as plain
+strings (no hex), and never open `.guild/guild.db`. If no `mcp__kumiai__*` tool is available to you,
+report failed and say so — never fall back to `tursodb`. Your calls:
+
+- read the ticket: `get {type: "task", key: "$T"}` — `objective`, `files`, `plan_id`,
+  `requirement_id` in one row; the log: `list {type: "work_log", where: {task_id: "$T"},
+  order_by: [{col: "id", dir: "asc"}]}`; bodies: `get` the `plan` or `requirement` (§0)
+- write: `log_work {task: "$T", entry}` and nothing else (§2) — never `set_task_status`,
+  `claim_task`, `set_node_status` or `resolve_gate`
 
 Two things specific to you: Svelte and TypeScript lines end in `;` constantly, so the hex rule
 fires on ordinary log entries — never skip it because an entry "is just code". And you do

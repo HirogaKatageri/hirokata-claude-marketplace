@@ -104,6 +104,9 @@ bash. Nothing polices them now — they are documented in `schema.sql` and nowhe
 
 ## Setup
 
+This is the `local` setup, and the default. A team board on Kumiai needs none of steps 1–2 — see
+[Backends](#backends).
+
 ### 1. Install tursodb
 
 ```bash
@@ -137,6 +140,9 @@ missing, reads the roster straight from the agent files, and opens with the brie
 
 ### Storage modes
 
+These are `backend: local`'s two engines. The board-level choice — local or Kumiai — is
+[Backends](#backends).
+
 | Mode | Where | Binary | Status |
 |------|-------|--------|--------|
 | `local` (default) | `.guild/guild.db` | `tursodb` | The verified path. |
@@ -167,6 +173,87 @@ the new board does **not** inherit the library, the coverage map or the event fe
 the retired file. Carrying them across would mean `ATTACH`, which is experimental on tursodb 0.7.2
 and not something the guild builds a procedure on. Nothing is destroyed; nothing is migrated
 either. A board you mean to keep working on is a board you do not replace.
+
+---
+
+## Backends
+
+**Where the board lives is a choice, and `local` is the default.** `backend:` in
+`.guild/config.yaml` decides it; a config with no `backend:` line is `local`, so every existing
+guild is untouched by this section.
+
+| | `local` (default) | `kumiai` |
+|---|---|---|
+| The board | `.guild/guild.db` | a workspace in Kumiai, the team's planning app |
+| Reached through | `tursodb` and SQL | the `kumiai` MCP server's typed tools |
+| Visible to | this machine | the team, and the Kumiai UI — the same goals, projects, requirements and tasks |
+| Setup | install `tursodb`, apply `schema.sql` | add the MCP server, authenticate, pick a workspace — no schema to apply |
+| Status | the verified path | **new in 9.4.0, not verified end to end** |
+
+**Why a second backend at all.** `guild.db` is gitignored because a binary file is a bad thing to
+merge, which makes the local board machine-local by construction: the guild master's laptop is
+the only place the work can be read. Kumiai serves the **whole** warehouse — every table, every
+`v_*` view, the event feed — against a versioned contract (`kumiaikata/docs/guild-contract.md`,
+1.0.0), so a team reads the same board in a browser while the guild works it.
+
+**What stays the same is everything that matters.** The hierarchy, the graph, the two gates, the
+vocabularies and the views are identical, and the views are still the API — `read_view` takes
+every `v_*` name. The roster is the agent files in both backends; neither stores it. Every skill
+and agent keeps its SQL as the local path and carries a one-line pointer to the matching section
+of `skills/warehouse/references/kumiai.md`, which mirrors `queries.md` section for section.
+
+**What changes, honestly.** Free text is plain JSON, so the hex rule and the splitter are gone.
+One tool call is one transaction, so a graph or a gate decision cannot half-land. A guarded
+`UPDATE … WHERE status = 'todo'` is a status tool with `expect_status`, and a lost race is a
+`CONFLICT` rather than zero rows. What remains different — no traversal, fixtures that stay
+local, a project priority of 5 reading back as 4 — is the short *Known limits* list at the end of
+`kumiai.md`.
+
+### Setting up a kumiai board
+
+1. Add the server **at project scope, named exactly `kumiai`**, and authenticate:
+
+   ```bash
+   claude mcp add --scope project --transport http kumiai https://<kumiai-host>/mcp
+   ```
+
+   then `/mcp` → `kumiai` → **Authenticate** (OAuth, through Kumiai's own login).
+2. Say **"check in"**. On a first check-in the orchestrator asks which backend you want; for
+   `kumiai` it checks the server is connected, refuses a server whose contract major version is
+   not 1, lists your team's workspaces and lets you pick one or create one, then writes:
+
+   ```yaml
+   backend: kumiai
+   kumiai:
+     url: https://<kumiai-host>
+     workspace: <workspace id>
+   ```
+
+   An existing local guild switches by adding those lines. **Nothing migrates the board** — the
+   local `guild.db` stays where it is, readable, and the workspace starts as its own board.
+
+`config.yaml` holds the URL and the workspace id, never a token; the OAuth credential lives in
+Claude Code's MCP configuration. `mode: local|cloud` only means something on `backend: local`.
+
+### Why the server is not in the plugin's `.mcp.json`
+
+**A plugin-bundled MCP server is started for everyone who installs the plugin.** An HTTP server
+that needs OAuth would then put an authentication prompt in front of every local-mode user, for a
+service they never chose and may not have an account on. So the plugin ships no `.mcp.json`, and
+the server is the user's to add, per project.
+
+Two consequences, both deliberate:
+
+- **The name is fixed.** Every agent grants `mcp__kumiai__*` in its `tools:`, and every skill
+  that already pre-approved `tursodb` in `allowed-tools:` pre-approves `mcp__kumiai__*` beside it.
+  The grant is inert until a server called `kumiai` is connected — a local guild never sees a
+  kumiai tool, and its permission prompts are exactly what they were. Skills that never had an
+  `allowed-tools:` line still have none, so in kumiai mode their tool calls prompt like any other
+  until you allow `mcp__kumiai__*` in your settings. A server added under any other name is one no
+  guild member can call.
+- **Project scope, not user scope**, because the workspace is a per-project fact in a committed
+  `config.yaml`, and `--scope project` writes the server into the project's `.mcp.json` next to
+  it. (Claude Code asks once before using a project-scoped server.)
 
 ---
 
@@ -263,8 +350,9 @@ Read the view; do not re-derive the rule. The ones you will use most:
 
 ## Working with the warehouse
 
-Load `guild:warehouse` before touching guild data. It carries the connection recipe, the six rules
-that are always true, and three references: `schema.md` (what every table is *for*, and which rules
+Load `guild:warehouse` before touching guild data. Its first step reads `backend:`; on
+`kumiai` it hands you `references/kumiai.md` and the rest of this section does not apply. For
+`local`, it carries the connection recipe, the rules that are always true, and three references: `schema.md` (what every table is *for*, and which rules
 are enforced versus conventional), `queries.md` (the canonical verified queries — copy from it rather
 than improvising), and `tursodb-gotchas.md`.
 
@@ -400,7 +488,7 @@ plugins/guild/
 ├── agents/                 # 15 roster members; frontmatter is the roster source
 ├── skills/
 │   ├── warehouse/          # how to reach the board — the skill every member loads
-│   │   └── references/     # schema.md, queries.md, tursodb-gotchas.md, templates/
+│   │   └── references/     # schema.md, queries.md, kumiai.md, tursodb-gotchas.md, templates/
 │   ├── validate/           # runs the expectations against the live board
 │   └── …                   # check-in, shift, brief, dashboard, new-requirement, qa, …
 ├── docs/
@@ -417,8 +505,8 @@ The board, in your repository:
 
 ```
 .guild/
-├── config.yaml         # committed. version + storage mode; env var NAMES only, never a credential
-├── guild.db            # gitignored. THE BOARD
+├── config.yaml         # committed. version + backend + storage mode; names and ids, never a credential
+├── guild.db            # gitignored. THE BOARD on `backend: local` (absent on `kumiai`)
 ├── docs/               # evergreen researcher knowledge (the `doc` table is the primary copy)
 ├── qa/                 # evergreen QA artifacts — charter, missions, bug ledger, session logs
 ├── dashboard.html      # gitignored. regenerated wholesale
@@ -497,6 +585,9 @@ tursodb .guild/guild.db < schema.sql
 `schema.sql` seeds version **9**. **No migration is idempotent** — a second run of 006 fails on
 `CREATE TABLE project`, which is the safe direction to fail — and **order is not optional**. A fresh
 board needs none of this.
+
+**v9.4.0 ships no migration either.** The Kumiai backend adds a second door to the same
+warehouse; `schema.sql` is untouched, and a local board is exactly what it was.
 
 **v8.1.0 and v9.0.0–v9.3.0 ship no migration.** Removing `guild:clear-board` (8.1.0), renaming
 the roster to `project-manager`/`strategist` and splitting `architecture` into `planning` and
@@ -579,6 +670,10 @@ What is **not**:
   than meeting an actual member's output. Nothing runs the guild end to end.
 - No skill or agent has been exercised against a live board in this form.
 - Cloud mode is unverified end to end.
+- **The Kumiai backend is unverified end to end.** It was written against the contract while
+  Kumiai itself was being built, so no skill or agent has yet called a live Kumiai server. The
+  operation map in `references/kumiai.md` is the specification of what each call should be, not
+  a record of calls that were observed to work.
 - The conventions listed above are unenforced by construction, and a rewrite is exactly when
   unenforced conventions get quietly violated. The expectations are aimed squarely at those eight —
   but aiming at a failure is not the same as having caught one.

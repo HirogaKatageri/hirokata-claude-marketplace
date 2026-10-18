@@ -6,9 +6,9 @@ description: >
   "guild release", or wants to finalize completed requirements into a versioned
   release. Renames CHANGELOG Unreleased to a version, records the released
   requirements on the board, and creates an annotated git tag. Does not push.
-version: 5.0.0
+version: 5.1.0
 user-invocable: true
-allowed-tools: Bash(tursodb *), Bash(git *)
+allowed-tools: Bash(tursodb *), Bash(git *), mcp__kumiai__*
 ---
 
 # Guild Release — stamp the changelog and tag a version
@@ -25,6 +25,11 @@ record. Load `guild:warehouse` before the first query.
 export PATH="$HOME/.turso:$PATH"
 DB=.guild/guild.db
 ```
+
+**Backend.** `backend:` in `.guild/config.yaml` — absent means `local`, and the SQL below is the
+local path. On `kumiai` every board read and write is a tool call against `workspace` from the
+config, with `actor: "orchestrator"` (`guild:warehouse` → `references/kumiai.md`); each step
+names its call. The CHANGELOG and git steps are identical in both.
 
 ## Arguments
 
@@ -63,6 +68,11 @@ SELECT r.id, r.title
  ORDER BY r.id;
 ```
 
+On `kumiai`: `list {type: "requirement", where: {status: "done"}}`, then `list {type:
+"guild_state", where: {key: {op: "like", value: "release:%"}}}` — each value is the same JSON, so a
+requirement already in some release's `requirements` array is out of scope. Page both until
+`next_offset` is `null`.
+
 With `--only`, use exactly the named ids instead — and verify each is `done` before including it.
 
 Empty set → stop with `No completed requirements to release since the last release.`
@@ -80,6 +90,9 @@ SELECT id, status, tasks_total, tasks_done, tasks_open, tasks_blocked, tasks_fai
   FROM v_requirement_progress
  WHERE id IN ('REQ-007','REQ-008');
 ```
+
+(kumiai: `read_view {view: "v_requirement_progress", where: {id: ["REQ-007","REQ-008"]}}`, and
+`v_failed_tasks` the same way with `where: {requirement_id: [...]}`.)
 
 **Warn, never block.** Two different warnings, and the difference matters:
 
@@ -114,7 +127,8 @@ SELECT id, status, tasks_total, tasks_done, tasks_open, tasks_blocked, tasks_fai
 2. Show current version, the requirements in scope with their titles, and ask `What version?`
 3. Validate against `v\d+\.\d+\.\d+(-[A-Za-z0-9.]+)?`. Re-prompt on invalid.
 4. Reject a version whose tag already exists, **and** one already present as a
-   `release:<version>` key on the board — either means this version was already cut.
+   `release:<version>` key on the board — either means this version was already cut
+   (kumiai: `get_state {key: "release:<version>"}` returns a row).
 
 ## Step 5 — CHANGELOG.md
 
@@ -152,6 +166,22 @@ VALUES ('release:v1.2.0',
 ON CONFLICT(key) DO UPDATE SET value = excluded.value
 RETURNING key, value;
 ```
+
+On `kumiai`, call `fingerprint {workspace}` first and keep the result (Step 9 compares it), then
+write the record — the same key and the same JSON value — and one explicit event so the feed says
+a release happened, since Kumiai's feed is what the team reads in its UI:
+
+```json
+set_state    {"workspace": "<ws>", "actor": "orchestrator", "key": "release:v1.2.0",
+              "value": "{\"released\":\"2026-10-18\",\"requirements\":[\"REQ-007\",\"REQ-008\"]}"}
+record_event {"workspace": "<ws>", "actor": "orchestrator", "verb": "released",
+              "subject_type": "release", "subject_id": "v1.2.0",
+              "payload": {"requirements": ["REQ-007", "REQ-008"]}}
+```
+
+`value` is a string holding JSON, exactly as the local column is TEXT holding JSON. `set_state`
+is an upsert, so re-running after a failed hook is still safe. **These are the only two writes**
+— no `update_requirement`, no status move.
 
 **A release never changes a requirement's status and never deletes a row.** `done` requirements
 cost nothing on the board — `v_next_task` only ever looks at open tasks — and deleting them would
@@ -206,7 +236,10 @@ Not pushed. Push with:
 
 ## Step 9 — verify against §9
 
-Run `guild:validate release`. §9 of `docs/expectations.md` follows from one sentence — a
+Run `guild:validate release` (kumiai: `check_invariants {process: "release"}`, and §9.a is
+`fingerprint {workspace}` taken before Step 6 and again after it — the only differences permitted
+are the one `guild_state` row and the one `released` event). §9 of
+`docs/expectations.md` follows from one sentence — a
 release *records*, it does not retire: §9.a fingerprints the board before and after and the
 **only** difference permitted is the one `guild_state` row, §9.b that the release record is
 well-formed and no requirement was released twice or released while not done. **Report every
@@ -225,7 +258,7 @@ is not, and must not run.
 - **Never push** — the user decides when to publish a tag.
 - **Never skip hooks** — no `--no-verify`.
 - **Never delete or restatus a released requirement.** A release records; it does not retire.
-- **`-m list`, always.** The default `pretty` output mode truncates long values with an ellipsis,
+- **`-m list`, always** (local). The default `pretty` output mode truncates long values with an ellipsis,
   and a truncated title is a lie that outlives the release.
 - **Flatten free text before it becomes structure.** A newline in a title forges a changelog
   bullet or a heading; `replace(replace(x, char(10),' '), '|','!')` in SQL, before it leaves the

@@ -2,7 +2,7 @@
 name: qa-strategist
 model: sonnet
 color: green
-tools: ["Read", "Grep", "Glob", "Write", "Edit", "Bash", "Skill"]
+tools: ["Read", "Grep", "Glob", "Write", "Edit", "Bash", "Skill", "mcp__kumiai__*"]
 capabilities: [qa-planning]
 serial: false
 skills:
@@ -60,6 +60,21 @@ export PATH="$HOME/.turso:$PATH"
 DB=.guild/guild.db          # cloud boards: see the skill's Connect section
 T=TASK-NNN
 ```
+
+**Backend.** Read `backend:` in `.guild/config.yaml` — absent means `local`, and the dispatch prompt
+names it too. Every SQL block in this file is the local path. On `kumiai` the same board is a Kumiai
+workspace: use the `mcp__kumiai__*` tools per `guild:warehouse` → `references/kumiai.md`, pass
+`workspace` from the config and `actor: "qa-strategist"` on every write, send free text as plain
+strings (no hex), and never open `.guild/guild.db`. If no `mcp__kumiai__*` tool is available to you,
+report failed and say so — never fall back to `tursodb`. Your calls:
+
+- read: `get task`, `list work_log where {task_id}`, `list coverage`; the oracle: `list
+  requirement`, `get requirement`, `read_view v_doc_current` (with `where: {kind:
+  "business"}`), `get doc`, `search_docs`, `read_view v_decision_log` (`where: {status:
+  "current"}`), `read_view v_doc_stale` (§0, §1)
+- write the risk map: `upsert_coverage {id, area, risk, spec_path, notes}` — never
+  `last_inspected_at`, you did not look (§6); `read_view v_coverage_due` to prioritise
+- missions are `log_work` Follow-up lines, exactly as below (§2)
 
 **The orchestrator owns every status transition, and nothing enforces that.** `UPDATE task SET
 status = …` is one statement any connection can run,

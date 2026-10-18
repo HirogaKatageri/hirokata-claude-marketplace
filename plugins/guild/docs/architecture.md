@@ -33,15 +33,53 @@ their own rules — which is the next section.
 
 ```
 skills/warehouse/
-├── SKILL.md                        # connect, the six rules that are always true
+├── SKILL.md                        # which backend, connect, the rules that are always true
 └── references/
     ├── schema.md                   # what each table is FOR; enforced vs. conventional
     ├── queries.md                  # the canonical verified queries — copy, don't improvise
+    ├── kumiai.md                   # the same operations as Kumiai tool calls, § for §
     ├── tursodb-gotchas.md          # the engine's sharp edges
     └── templates/                  # the execution templates, as knowledge
         ├── standard.md
         └── maintenance.md
 ```
+
+## 2a. Two backends, one warehouse
+
+`backend:` in `.guild/config.yaml` picks where the warehouse lives. **Absent means `local`**, so
+every guild that existed before the line did is unaffected.
+
+| | `local` (default) | `kumiai` |
+|---|---|---|
+| The board | `.guild/guild.db`, through `tursodb` | a Kumiai workspace, through the `kumiai` MCP server |
+| A member's door | SQL, from `references/queries.md` | typed tools, from `references/kumiai.md` |
+| The rules | CHECKs, views and triggers in `schema.sql` | the same, ported to Kumiai's Postgres (full parity with schema v9.3) |
+| Who can see it | this machine | the team, and the Kumiai UI |
+| Validation | `docs/expectations.md`'s SQL, run by `guild:validate` | the same document, run server-side by `check_invariants` |
+| The roster | the agent files | the agent files |
+
+**The design did not change; the door did.** The guild's argument is that rules belong in the
+engine, not in a wrapper a member can forget to call — and on Kumiai they still are: the CHECKs,
+the views and the event-writing triggers are Postgres's now, and a tool is a door to them, not a
+second rule. Three guarantees get *stronger* through that door: free text is plain JSON, so the
+splitter and the hex rule are gone; **one call is one transaction**, so a composite write such as
+instantiating a graph or resolving a gate cannot half-land; and `link` checks both ends of a
+knowledge edge, so a dangling edge cannot be written. The guard survives intact: a status move
+takes `expect_status`, and a mismatch is `CONFLICT` with nothing written — the same "somebody
+already moved it" the local `UPDATE … WHERE status = 'todo'` answers with zero rows.
+
+**The contract is the seam.** `kumiaikata/docs/guild-contract.md` (1.0.0) is the one spec both
+sides implement, and `whoami` reports its version so a guild refuses a server whose major
+version differs. The contract was written to the guild's prose — operator filters and paging,
+the status guard, an on-behalf-of claim, a gate reject that skips rather than fails, a fingerprint
+for the release check — so `references/kumiai.md` calls tools rather than working around them,
+and its short *Known limits* list is what remains.
+
+**The MCP server is the user's, not the plugin's.** It is added per project with `claude mcp add
+--scope project`, never shipped in the plugin's own `.mcp.json`: a plugin-bundled server would
+prompt every local-mode user to authenticate against a service they never chose. Every agent and
+skill that already pre-approved `tursodb` is granted `mcp__kumiai__*`, which is inert until a
+server named exactly `kumiai` is connected.
 
 ## 3. What the database enforces
 
@@ -195,8 +233,8 @@ The board, in a repository:
 
 ```
 .guild/
-├── config.yaml         # committed. version + mode; env var NAMES only, never a credential
-├── guild.db            # gitignored. THE BOARD — not derived, not rebuildable
+├── config.yaml         # committed. version + backend + mode; env var NAMES only, never a credential
+├── guild.db            # gitignored. THE BOARD on `backend: local` — not derived, not rebuildable
 ├── docs/               # evergreen researcher knowledge
 ├── qa/                 # evergreen QA artifacts
 ├── dashboard.html      # gitignored, regenerated wholesale
