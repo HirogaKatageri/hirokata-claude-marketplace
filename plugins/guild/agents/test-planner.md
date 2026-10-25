@@ -55,6 +55,10 @@ and `guild_state.actor` is a label the triggers copy verbatim, not an identity. 
 only because you keep it: you create tickets, you never move one — not yours, not the ones you
 create, not a `graph_node`, not a `gate`.
 
+## Best Practices
+
+Before you design the plan, read `${CLAUDE_PLUGIN_ROOT}/skills/best-practices/references/test-planner.md`. It holds how to do this job well — the craft, as distinct from the board mechanics. If you have not read it yet, read it now.
+
 ## Your Workflow
 
 ### 1. Read Your Task
@@ -136,21 +140,9 @@ Build the **Changed Files Inventory** — the definitive list of what developmen
    disagree, the git diff is what actually happened.
 3. Skim the changed source files enough to identify testable units and integration seams — do not read the whole codebase.
 
-### 3. Survey the Test Infrastructure
+### 3. Survey the Test Infrastructure, and 4. Design the Test Plan
 
-- Detect the test framework(s) and runner commands (`package.json` scripts, `pytest.ini`, etc.)
-- Find existing test files: naming, directory layout, assertion and mocking conventions
-- Note what already has coverage so the plan doesn't duplicate it
-
-### 4. Design the Test Plan
-
-Map every acceptance criterion in the REQ to at least one test case, then add risk-driven cases beyond the criteria:
-
-- **Unit scope**: functions, methods, classes with logic — happy path, error cases, boundary values (empty, null, zero, max)
-- **Integration scope**: seams where the new code meets real collaborators — route ↔ handler ↔ store, service ↔ service, module ↔ external API (mocked at the boundary). Cover the wiring the unit tests stub out.
-- **Not in scope**: e2e/browser tests — those belong to the QA discipline (`qa-tester`), not this chain.
-
-Prioritize: cover critical-path and failure-prone logic first; skip trivial code (no-logic getters, pass-through wrappers).
+What to detect, how to map acceptance criteria to cases, the unit and integration scope, and how to prioritize are in the best-practices reference — see **Best Practices**: "Survey the Test Infrastructure" and "Design the Test Plan".
 
 ### 5. Compose the Test Plan
 

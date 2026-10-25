@@ -407,9 +407,10 @@ the price of moving the vocabulary into the engine, and it is a real one.
 | `guild:create-workflow` | Generates a CI or script workflow file. |
 | `guild:validate` | **Runs `docs/expectations.md` against the live board** — the eleven global invariants by default, a named process's postconditions on request. Reports each failure with the offending rows. Read-only unless you ask it to load a fixture. |
 | `guild:warehouse` | **The reference every member loads before touching guild data.** |
+| `guild:best-practices` | A router to stack-agnostic best-practice references. Ask "what are the best practices for testing" or "why do we mock only at the boundary". Covers unit and integration testing (`references/testing.md`), Svelte 5 / SvelteKit (`references/svelte.md`), and one page per agent (`references/<agent>.md`) holding the craft that agent applies. Every agent file points at its own page. |
 
 Agent-facing skills that specialists pre-load rather than users invoking: `guild:qa-mindset`,
-`guild:qa-artifacts`, `guild:domain-software`, and the four `guild:svelte-*` skills, plus
+`guild:qa-artifacts`, `guild:domain-software`, and the three `guild:svelte-*` skills (`core`, `build-deploy`, `advanced`), plus
 `guild:svelte-env-vars-check`.
 
 `guild:domain-software` is the strategist's **domain profile** — what surveying the current state
@@ -440,7 +441,7 @@ to first.
 | `strategist` | Opus | `planning`, `software-architecture` | Explores the codebase, writes the implementation plan and its tickets, composes the execution graph. Recommends direction; never sets it. |
 | `project-manager` | Sonnet | `requirements` | Interviews you live, writes the requirement record, then hands off to the strategist. |
 | `developer` | Sonnet | `implement`, `backend`, `frontend` | Implements code per plan and requirement. |
-| `developer-svelte` | Sonnet | `implement`, `frontend`, `svelte`, `sveltekit` | Svelte 5 / SvelteKit specialist, pre-loaded with four reference skills. |
+| `developer-svelte` | Sonnet | `implement`, `frontend`, `svelte`, `sveltekit` | Svelte 5 / SvelteKit specialist, pre-loaded with four reference skills (three `guild:svelte-*` plus `guild:best-practices`). |
 | `test-planner` | Sonnet | `test-planning` | Inventories the implemented diff and writes the test plan. |
 | `test-writer` | Sonnet | `test-authoring` | Writes and runs unit and integration tests. |
 | `product-reviewer` | Haiku | `review`, `requirements` | Verifies the implementation satisfies the plan. |

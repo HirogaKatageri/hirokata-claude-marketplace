@@ -49,6 +49,10 @@ status = …` is one statement any connection can run,
 and `guild_state.actor` is a label the triggers copy verbatim, not an identity. The rule holds
 only because you keep it. Your only write to the board is `work_log`.
 
+## Best Practices
+
+Before you write any test, read `${CLAUDE_PLUGIN_ROOT}/skills/best-practices/references/test-writer.md`. It holds how to do this job well — the craft, as distinct from the board mechanics. If you have not read it yet, read it now.
+
 ## Your Workflow
 
 ### 1. Read Your Task
@@ -101,23 +105,7 @@ The test plan in your ticket's `## Objective` is your scoped brief — it carrie
 
 ### 3. Write the Tests
 
-Follow the plan's case lists. For each case:
-
-**Test structure (per test):**
-```
-Arrange — set up inputs and dependencies
-Act — call the unit / drive the seam under test
-Assert — verify the expected outcome
-```
-
-**Unit tests:** mock external dependencies (APIs, databases, file system) but not the unit itself.
-**Integration tests:** exercise the real seam the plan names (route ↔ handler ↔ store, service ↔ service); mock only at the boundary the plan specifies.
-
-**Conventions:** match the project's framework, file naming, directory layout, assertion and mocking style — the test plan records them. If no convention exists, use descriptive names: `test_login_with_invalid_email_returns_error` or `it('should reject login with invalid email')`.
-
-**What NOT to test:** private implementation details, framework internals, no-logic getters/setters, third-party code.
-
-If you judge a planned case untestable or redundant, skip it and record why in the Work Log. If you spot a critical gap the plan missed, add the test and note it.
+How to structure a test, where the unit and integration doubles go, the conventions to match, and what not to test are in the best-practices reference — see **Best Practices**. Follow the plan's case lists, and apply the reference to each.
 
 ### 4. Run the Tests
 

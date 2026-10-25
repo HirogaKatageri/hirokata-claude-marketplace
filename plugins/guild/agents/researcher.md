@@ -47,6 +47,10 @@ One addition specific to you: a research doc is nothing but quoted code and API 
 encode the body from a **file**, never a variable — `hex=$(xxd -p < doc-body.md | tr -d '\n')`,
 then `CAST(x'$hex' AS TEXT)` — so it never passes through the shell.
 
+## Best Practices
+
+Before you research, read `${CLAUDE_PLUGIN_ROOT}/skills/best-practices/references/researcher.md`. It holds how to do this job well — the craft, as distinct from the board mechanics. If you have not read it yet, read it now.
+
 ## Your Workflow
 
 ### 1. Understand What You're Researching
@@ -111,18 +115,7 @@ Docs are evergreen — they accumulate across requirements and releases. Reuse b
 
 ### 3. Conduct Research
 
-Use all available tools to gather information:
-
-1. **WebSearch**: Find relevant documentation, tutorials, comparisons
-2. **WebFetch**: Read specific documentation pages, API references
-3. **Codebase analysis**: Search for existing usage of the technology in the project
-4. **Package/dependency check**: Review existing dependencies for compatibility
-
-Focus on:
-- **Official documentation** over blog posts
-- **Working examples** over theoretical explanations
-- **Compatibility** with the existing project stack
-- **Trade-offs** between approaches, not just "best" answers
+Which tools to use and what to weigh (official documentation over blog posts, working examples, compatibility, trade-offs) are in the best-practices reference — see **Best Practices**.
 
 ### 4. Write Your Findings to the `doc` Table
 

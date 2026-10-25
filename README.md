@@ -260,9 +260,10 @@ The dashboard is one self-contained file — all CSS and JS inline, deterministi
 | `guild:verify-and-fix` | Diagnose an error end-to-end and apply a test-driven fix | "check this error", "I have a bug", "debug this", "this is broken" |
 | `guild:validate` | Run `docs/expectations.md` against the live board — nine global invariants, or one process's postconditions. Read-only | "validate the guild", "check the board is coherent" |
 | `guild:warehouse` | The reference every guild member loads before touching board data — the connection recipe, the six rules, and the canonical queries | loaded by agents, not typed |
+| `guild:best-practices` | A router to testing and Svelte best-practice references, plus one craft page per agent that each agent file names by path | "testing best practices", "flaky tests", "svelte best practices" |
 | `guild:guild-status` | Deprecated alias for `guild:brief`; claims no trigger phrases | typed `/guild:guild-status` only |
 
-Agent-facing skills that specialists pre-load rather than users invoking: `guild:qa-mindset`, `guild:qa-artifacts`, the four `guild:svelte-*` reference skills, and `guild:svelte-env-vars-check`.
+Agent-facing skills that specialists pre-load rather than users invoking: `guild:qa-mindset`, `guild:qa-artifacts`, the three `guild:svelte-*` reference skills, and `guild:svelte-env-vars-check`.
 
 ### Agents
 

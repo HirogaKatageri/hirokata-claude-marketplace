@@ -221,6 +221,8 @@ plugins/guild/
 │   │                       # needs tests and review (the assurance assessment, Step 3.7).
 │   │                       # `domain:` in .guild/config.yaml picks one; absent means this.
 │   ├── release/ comprehensive-review/ verify-and-fix/ create-workflow/
+│   ├── best-practices/     # a router to testing and Svelte references, plus one craft page per
+│   │                       # agent (references/<agent>.md) that each agent file names by path
 │   └── svelte-*/           # specialist reference skills
 └── docs/
     ├── architecture.md           # this file
