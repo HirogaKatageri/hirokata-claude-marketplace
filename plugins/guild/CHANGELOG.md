@@ -16,6 +16,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+- **`guild:best-practices`** — a router skill for best-practice references, loaded when the user
+  asks for best or good practices, or what and why, for an area it covers. References:
+  `references/testing.md` (stack-agnostic unit and integration tests — what to test, structure, the
+  test-double boundary, data and isolation, suite speed, determinism, a finish checklist) and
+  `references/svelte.md` (Svelte 5 / SvelteKit state, performance, accessibility, SEO, TypeScript,
+  testing, error handling), plus one page per agent. Defers to `guild:qa` for e2e passes.
+
+### Changed
+- **Agent practices moved out of the agent files.** All fifteen agents carried their craft
+  inline: the implementation principles, the review checklists,
+  the test-design rules, the research method, the interview technique, the document-kind test.
+  That text now lives in `skills/best-practices/references/<agent>.md`, and each agent file has a
+  `Best Practices` section naming its page by `${CLAUDE_PLUGIN_ROOT}` path plus a pointer at each
+  place the text used to be. Board mechanics (SQL, reporting, relay protocols, `What NOT to Do`)
+  stay in the agent files.
+  The two QA pages defer to `guild:qa-mindset` for the pillars, hybrid oracle and what-if catalog
+  instead of repeating them, and the `test-writer` page defers to `testing.md` on test doubles.
+- **`guild:svelte-best-practices` is now `guild:best-practices` → `references/svelte.md`.** The
+  content moved unchanged; the skill name no longer exists. `developer-svelte` preloads
+  `guild:best-practices` in its place and reads the Svelte reference before writing code.
+
+---
+
 ## [9.4.0] - 2026-10-18
 
 ### Added

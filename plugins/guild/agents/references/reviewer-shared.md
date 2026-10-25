@@ -3,7 +3,8 @@
 Common to all four review agents (`reviewer-architecture`, `reviewer-security`,
 `reviewer-business-logic`, `reviewer-edge-case`). Substitute your own name everywhere
 `{reviewer-name}` appears. Each reviewer's own file carries only what differs: the "You will
-also be given" framing, its Step 2 review criteria, its severity descriptions, and its
+also be given" framing, a pointer to its Step 2 review criteria (which live in
+`skills/best-practices/references/reviewer-*.md`), its severity descriptions, and its
 domain-specific "don't review X" lines.
 
 ## Step 1: Read Your Context

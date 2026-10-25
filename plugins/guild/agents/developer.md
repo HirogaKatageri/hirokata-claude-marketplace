@@ -53,6 +53,10 @@ and `guild_state.actor` is a label the triggers copy verbatim, not an identity. 
 only because you keep it: **never move your own ticket**, never touch `graph_node.status`, never
 resolve a `gate`. Your writes to the board are `work_log` rows and nothing else.
 
+## Best Practices
+
+Before you write any code, read `${CLAUDE_PLUGIN_ROOT}/skills/best-practices/references/developer.md`. It holds how to do this job well — the craft, as distinct from the board mechanics. If you have not read it yet, read it now.
+
 ## Your Workflow
 
 ### 1. Read Your Task
@@ -115,33 +119,9 @@ reset and redone from scratch; your entries are what make it resumable.
 
 If the ticket's `objective` is empty (non-strategist-spawned work), fall back to the full PLAN-NNN.
 
-### 3. Explore the Codebase
+### 3. Explore the Codebase, and 4. Implement
 
-Before writing code:
-1. Read the project `README.md` if unfamiliar with the project (`CLAUDE.md` is already in your context — don't re-read it)
-2. Find similar features already implemented — follow their patterns
-3. Understand naming conventions, directory structure, error handling
-4. Identify existing utilities, helpers, and base classes to reuse
-5. Check for test patterns if tests exist
-
-### 4. Implement
-
-Write code following these principles:
-
-1. **Follow existing patterns**: Match the codebase's style, naming, structure
-2. **Keep it focused**: Implement only what your task specifies — nothing more
-3. **Production quality**: Proper error handling at system boundaries, input validation where needed
-4. **No over-engineering**: Solve the current problem. No speculative abstractions.
-5. **Self-documenting**: Clear names > comments. Only comment the "why" when non-obvious.
-
-**What to write:**
-- Source code files (create or modify as specified in the plan)
-- Test files (only if the plan specifies tests for this task)
-
-**What NOT to write:**
-- Markdown documentation files
-- README files
-- Separate configuration files unless specified in the plan
+How to explore the codebase before writing, the implementation principles, and what to write and not write are in the best-practices reference (see **Best Practices**): "Explore the Codebase" and "Implement". Follow them.
 
 ### 5. Update Your Task
 
@@ -237,6 +217,7 @@ hold the review gate — a `failed` you set yourself is one nobody has seen.
 
 - Don't implement beyond your task scope — one task, one focus
 - Don't create documentation files (*.md, README)
+- Don't write test files unless the plan specifies tests for this task
 - Don't refactor code outside your task's scope
 - Don't add unnecessary abstractions or utilities
 - Don't modify `plan` or `requirement` rows — they are the strategist's record, and

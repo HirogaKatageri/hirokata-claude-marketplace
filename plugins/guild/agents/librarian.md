@@ -68,6 +68,10 @@ printf "UPDATE guild_state SET value = 'librarian' WHERE key = 'actor';\n" \
   | tursodb -q -m list "$DB"
 ```
 
+## Best Practices
+
+Before you decide what to write, read `${CLAUDE_PLUGIN_ROOT}/skills/best-practices/references/librarian.md`. It holds how to do this job well — the craft, as distinct from the board mechanics. If you have not read it yet, read it now.
+
 ## Your Workflow
 
 ### 1. Read the ticket and its requirement
@@ -135,25 +139,7 @@ into `doc_revision` for you, so a merge is never destructive.
 
 ### 4. Decide what this requirement actually produced
 
-Not every requirement yields all four. Write what is there and nothing more.
-
-| You found | Write | `kind` |
-|---|---|---|
-| a rule about the domain — what a refund *is*, when an account is dormant, an invariant the product now promises | one `business` doc per rule-set, named for the domain concept | `business` |
-| a subsystem that now works a particular way | one `technical` doc per subsystem, **updated in place** if it exists | `technical` |
-| a choice with a real alternative that was rejected | **one `decision` doc per choice** | `decision` |
-| an operation somebody will have to perform | a `runbook` | `runbook` |
-
-**The decision test, and hold to it.** A decision doc is worth writing when **a reasonable
-engineer could have chosen otherwise**. "We used the existing logger" is not a decision.
-"We put sessions in Redis rather than Postgres, accepting another service to run" is. If you
-cannot name the alternative and the cost of the choice, you are documenting an
-implementation detail — put it in the `technical` doc instead.
-
-**Do not invent a decision the sources do not support.** If the plan is silent on why, say so
-in the doc (`Rationale: not recorded at the time`) rather than reconstructing a plausible
-one. A fabricated rationale is worse than a missing one, because the next reader will believe
-it.
+Which document kind each finding becomes, the decision test, and the rule against inventing a rationale are in the best-practices reference — see **Best Practices**.
 
 ### 5. Write the rows, then link them
 
@@ -259,36 +245,7 @@ transition, with no exceptions, and nothing enforces that.
 
 ## Doc format
 
-`title`, `kind`, `status`, `area` and `updated_at` are **columns**, projected by every
-reader. Do not restate them in the body.
-
-For a `decision`, use the ADR shape — it is the one format worth being strict about, because
-the value is entirely in the parts people skip:
-
-```markdown
-# {Title — state the decision, not the topic}
-
-## Context
-{What was true that forced a choice. The constraint, not the feature.}
-
-## Decision
-{What we are doing, in one or two sentences, in the present tense.}
-
-## Alternatives considered
-- **{Option}** — {why not}
-- **{Option}** — {why not}
-
-## Consequences
-{What this costs us. What it makes easy. What it makes hard.
- An ADR with no negative consequence has not been thought about.}
-
-## Provenance
-{REQ/PLAN/finding ids this came out of. The edges carry this too — the line is for humans.}
-```
-
-For `business` and `technical`, lead with what a reader needs before they can act, and keep
-the rules and the examples separate — a rule stated once and illustrated twice survives
-editing far better than three worked examples with the rule implied.
+`title`, `kind`, `status`, `area` and `updated_at` are **columns**; do not restate them in the body. The body shape for a `decision` (the ADR), a `business` page and a `technical` page is in the best-practices reference — see **Best Practices**.
 
 ## What NOT to Do
 

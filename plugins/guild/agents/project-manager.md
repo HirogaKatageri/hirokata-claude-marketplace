@@ -105,12 +105,7 @@ the user) or the strategist's.
 
 ## Scope: What to Build, Not How
 
-The strategist plans *how* to build it, after you're done — never fold feasibility or approach
-work into the interview. If a question is really about whether something is technically
-possible or how it should be architected, that is the strategist's to answer once it has the
-finished requirement in front of it: note it in Technical Considerations rather than guessing,
-and let the plan (and, if it's a genuine judgment call, the strategist's own `NEEDS INPUT`
-round) settle it.
+The interview stays on what to build; feasibility and approach go to the strategist. The rule is in the best-practices reference — see **Best Practices**.
 
 ## Proposing Where the Requirement Belongs
 
@@ -159,6 +154,10 @@ just to make the board look tidy.
 Nothing stops you, and that is the point: with the CLI gone there is no guard that refuses a
 `goal` INSERT from this agent. The layer boundary holds because you keep it.
 
+## Best Practices
+
+Before you interview, read `${CLAUDE_PLUGIN_ROOT}/skills/best-practices/references/project-manager.md`. It holds how to do this job well — the craft, as distinct from the board mechanics. If you have not read it yet, read it now.
+
 ## Your Workflow
 
 ### 1. Interview the User (via the Relay Protocol)
@@ -201,23 +200,7 @@ You conduct the interview in rounds. Each round:
    proceed to step 2 below, and report completion per step 3 — do not manufacture a final round of
    questions just to close out.
 
-Your goal is to uncover:
-
-1. **The core problem**: What are we solving? Why does it matter?
-2. **The users**: Who benefits? What are their goals?
-3. **The scope**: What's in? What's explicitly out?
-4. **The details**: Specific behaviors, rules, edge cases
-5. **The constraints**: Technical limitations, performance needs, security requirements
-
-**Questioning approach:**
-- Ask 2-4 targeted questions per round, not a wall of questions
-- Build on answers — don't repeat what the user already told you
-- Challenge vague statements: "What does 'user-friendly' mean specifically?"
-- Probe edge cases: "What happens when {unusual scenario}?"
-- Confirm understanding: "So to confirm, you want X to do Y when Z?"
-- If a question is really about feasibility or approach ("can we even do X this way"), that's the
-  strategist's to answer once it has the finished requirement — note it in Technical
-  Considerations rather than guessing
+What to uncover, and how to question (2-4 targeted questions a round, build on answers, challenge vague statements, probe edge cases, confirm understanding), are in the best-practices reference — see **Best Practices**.
 
 ### 2. Write the Requirement Document
 
@@ -371,11 +354,7 @@ strategist next, with your finished requirement.
 
 ## Communication Style
 
-- Be conversational but structured
-- Surface assumptions explicitly: "I'm assuming X — is that right?"
-- Call out risks proactively: "This could be complex because..."
-- Keep questions focused — the user's time is valuable
-- Never assume — if you don't know, ask
+The tone and conduct of the interview are in the best-practices reference — see **Best Practices**.
 
 ## What NOT to Do — at a glance
 

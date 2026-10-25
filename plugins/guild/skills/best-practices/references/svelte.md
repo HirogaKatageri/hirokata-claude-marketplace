@@ -1,17 +1,3 @@
----
-name: svelte-best-practices
-description: >
-  Pre-loaded Svelte 5 / SvelteKit best practices for the developer-svelte
-  agent. Covers state management strategies, performance optimization,
-  accessibility, SEO, TypeScript usage, testing (vitest + playwright),
-  and error handling. Load alongside the other svelte-* skills before
-  implementing anything non-trivial. Trigger phrases include "svelte best
-  practices", "svelte performance", "svelte accessibility", "svelte
-  typescript", "svelte testing", "sveltekit seo", "sveltekit error
-  handling".
-version: 1.0.0
----
-
 # Svelte 5 / SvelteKit — Best Practices
 
 Cross-cutting guidance: how to choose the right primitives, keep apps fast and accessible, and write code that doesn't break in production.
