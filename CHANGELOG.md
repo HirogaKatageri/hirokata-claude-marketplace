@@ -33,11 +33,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matched by capability. A hand-written ticket requiring `architecture` is the one board that could
   be affected; `SELECT task_id, capability FROM task_capability WHERE capability = 'architecture'`
   finds it.
-- Versions: guild **8.1.0 → 9.4.0**; marketplace **7.1.1 → 8.4.0**. Full detail, including the
+- Versions: guild **8.1.0 → 9.5.0**; marketplace **7.1.1 → 8.5.0**. Full detail, including the
   8.1.1 and 8.1.2 releases folded into this jump, the 9.1.1 markdown-mirror removal, the 9.2.0
-  interview/skill changes, the 9.3.0 assurance assessment and the 9.4.0 Kumiai backend below, is in [`plugins/guild/CHANGELOG.md`](plugins/guild/CHANGELOG.md).
+  interview/skill changes, the 9.3.0 assurance assessment, the 9.4.0 Kumiai backend and the 9.5.0 Svelte refresh below, is in [`plugins/guild/CHANGELOG.md`](plugins/guild/CHANGELOG.md).
 
 ### Changed
+- **Guild Plugin v9.5.0 — the Svelte developer targets SvelteKit 3 and Svelte 5.57.** SvelteKit 3
+  shipped on 2026-10-01 and the Svelte skills still taught SvelteKit 2. `developer-svelte` and the
+  `svelte-*` skills were rewritten from the current official docs (config in `vite.config`, `#lib`,
+  `src/env.ts`, `$app/state`, `refreshAll`, the new error and redirect rules, current adapters, and
+  newer Svelte 5 features each tagged with the version it needs). Every file reads `package.json`
+  first and keeps an older project's patterns; nothing is upgraded unless a task asks. A new
+  `svelte-best-practices/references/deprecations.md` logs every deprecated, removed and legacy API
+  with its replacement, and the agent's final check uses it. No schema or migration change. Detail
+  in [`plugins/guild/CHANGELOG.md`](plugins/guild/CHANGELOG.md).
 - **Guild Plugin v9.4.0 — a second backend: Kumiai.** `backend: kumiai` in `.guild/config.yaml`
   puts the board in a shared Kumiai workspace, reached through a project-scoped MCP server named
   `kumiai`, against the versioned guild ↔ Kumiai contract; absent `backend` means `local`, and the
