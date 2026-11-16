@@ -101,8 +101,9 @@ machine you are on** with `roster.py --covers` rather than trusting the table.
 Use the **Svelte signals you already know** to decide whether to add the `svelte,sveltekit`
 preferred pair: the project has `svelte` or `@sveltejs/kit` in `package.json`, and the ticket's
 "Files to Touch" lists `.svelte`, `.svelte.ts`, `.svelte.js`, `+page.*`, `+layout.*`, `+server.*`,
-`+error.svelte`, `hooks.server.*`, `hooks.client.*`, `app.html`, `svelte.config.js`, or files under
-`src/routes/`, `src/lib/`, or `src/params/`. In a mixed-stack repo, decide **per ticket**, not per
+`+error.svelte`, `*.remote.*`, `hooks.server.*`, `hooks.client.*`, `app.html`, `svelte.config.js`
+(SvelteKit 2), `vite.config.*` with the `sveltekit()` plugin, `src/env.ts` or `src/params.ts`
+(SvelteKit 3), or files under `src/routes/`, `src/lib/`, or `src/params/`. In a mixed-stack repo, decide **per ticket**, not per
 plan — a ticket that builds a Go API requires `implement,backend`; its sibling that wires the Svelte
 UI adds the preferred pair.
 
