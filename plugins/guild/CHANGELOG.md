@@ -16,6 +16,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [9.5.0] - 2026-11-16
+
+### Changed
+- **The Svelte developer targets SvelteKit 3 and Svelte 5.57.** SvelteKit 3.0 shipped on 2026-10-01
+  (latest 3.2.0); Svelte is at 5.57.3 and Svelte 6 is not released. `agents/developer-svelte.md`
+  and the `svelte-core`, `svelte-advanced`, `svelte-best-practices`, `svelte-build-deploy` (with
+  `references/adapters.md`) and `svelte-env-vars-check` skills were rewritten from the official
+  docs, changelogs and npm, and each claim re-checked against them.
+- **Every Svelte file starts with "Supported versions".** It names the targets, tells the agent to
+  read `package.json` first and keep an older project's patterns (SvelteKit 2 stays on
+  `svelte.config.js`, `$lib` and `$env/*`), and says nothing is upgraded and `sv migrate` is not
+  run unless the task asks.
+- **SvelteKit 3 is taught:** config in `sveltekit({...})` in `vite.config`, `#lib` with file
+  extensions, `src/env.ts` with `defineEnvVars` and `$app/env/*`, `src/params.ts` with
+  `defineParams`, `$app/state`, `refreshAll`, shallow `goto`, `snapshot()`, `error(status,
+  message, props)`, external `redirect` with `{ external: true }`, `Response.json`, `handleError`
+  receiving every error, the wider server-only rules, and the current adapters (new Bun adapter;
+  Vercel edge runtime and Cloudflare `platform.env` removed).
+- **Newer Svelte 5 features, each tagged with its version:** `createContext`, `{const}` / `{let}`
+  declaration tags, class objects and arrays, `{@attach}` and `fromAction`, writable `$derived`,
+  `$props.id()`, `Spring` / `Tween`, `$state.eager`.
+- **Experimental features name their flag** (`compilerOptions.experimental.async`,
+  `experimental.remoteFunctions` — which also needs the async flag — and
+  `experimental.forkPreloads`) and are used only when the project already enables them.
+- **`developer-svelte` validates more:** `sv check`, the official Svelte autofixer when available,
+  and a scan for SvelteKit 2 leftovers on SvelteKit 3 projects.
+- **`domain-software` routes the new SvelteKit 3 files** (`*.remote.*`, `vite.config.*`,
+  `src/env.ts`, `src/params.ts`) to `developer-svelte`.
+
+### Added
+- **`skills/svelte-best-practices/references/deprecations.md`** — one log of every deprecated,
+  removed and legacy Svelte and SvelteKit API: status, the version it changed in, the replacement,
+  and the codemod task or compiler warning. It replaces the two partial old-to-new tables in
+  `svelte-best-practices` and `svelte-build-deploy`. `developer-svelte` reads it before touching
+  existing Svelte code, checks its own code against it, and records any deprecated call it leaves
+  in place in its work log.
+
+### Fixed
+- Wrong advice in the old skills: remote functions need two flags, not one; `runtime: 'edge'` on
+  Vercel; Cloudflare bindings from `platform.env`; `onNavigate` in `hooks.client.ts`; "don't
+  reassign `$derived`"; the `$inspect(...).with` signature; global CSS `prefers-reduced-motion`
+  stopping Svelte transitions.
+
+---
+
 ## [9.4.0] - 2026-10-18
 
 ### Added

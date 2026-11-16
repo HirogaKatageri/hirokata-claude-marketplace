@@ -1,10 +1,10 @@
 # HiroKata Claude Code Plugin Marketplace
 
-A curated collection of Claude Code plugins for enhanced development workflows. **Version 8.4.0** — [View Changelog](CHANGELOG.md)
+A curated collection of Claude Code plugins for enhanced development workflows. **Version 8.5.0** — [View Changelog](CHANGELOG.md)
 
 | Plugin | Version | What it is |
 |--------|---------|------------|
-| [**guild**](plugins/guild) | 9.4.0 | Continuous agent orchestration on a SQLite board whose rules live in the schema |
+| [**guild**](plugins/guild) | 9.5.0 | Continuous agent orchestration on a SQLite board whose rules live in the schema |
 | [**software**](plugins/software-project) | 1.1.1 | Task classification by clean-architecture phase, plan splitting, conventional commits, daily handoff reports |
 | [**research**](plugins/research) | 1.0.0 | Multi-perspective deep research, after Stanford's STORM method |
 | [**storytelling**](plugins/storytelling) | 1.0.0 | Six storytelling frameworks for making a message land |
