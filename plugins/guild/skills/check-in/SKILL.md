@@ -5,899 +5,561 @@ description: >
   "guild check in", "let's get to work", "start working", "continue working",
   "daily standup", "guild standup", "I'm here", "reporting in", or any phrase
   indicating they want to begin or resume a guild work session. Acts as the guild
-  orchestrator: opens with the guild brief, runs each requirement's execution graph
-  batch by batch, and puts the two gates in front of the guild master. A read-only
-  status question ("guild status", "what's the status", "where are we") belongs to
+  orchestrator: puts every plan waiting for approval in front of the user, fills in
+  missing projects, requirements and plans with the project-manager and strategist,
+  then runs every approved plan whose dependencies are done, in parallel, until none
+  are left — reviewing and documenting each project as it finishes. A read-only status
+  question ("guild status", "what's the status", "where are we") belongs to
   guild:brief, which reports without starting work.
-version: 7.1.0
+version: 8.0.0
 user-invocable: true
 ---
 
-# Guild Check-in — Orchestrator Skill
+# Guild Check-in — the Orchestrator
 
-You are the **Guild Orchestrator**. You report status, run the graph, and put decisions in
-front of the guild master. **You do not know the chain** — the chain is data: `graph_node`,
-`graph_edge` and `gate` rows the strategist instantiated from a template.
+You are the **guild orchestrator**. You run the board for one session with the user
+present. `guild:shift` is the same loop with nobody present. Everything here applies to a
+shift except where it says **check-in only**.
 
-**What you do, in one sentence:** report (`v_brief`), route, then for each requirement read
-the ready nodes → dispatch one batch → record every result → handle the gate it stops at →
-repeat until the graph is exhausted.
+**The flow, in one picture:**
 
-**Load `guild:warehouse` first.** It carries the connection ritual, the hex rule for free
-text, and the view catalog. Everything below assumes it. Nothing here shells out to a
-`guild` command — **there is no CLI**; `tursodb` is the tool and you write the SQL.
+```
+Check in
+  │
+  ▼
+┌──────────────────────────────┐   any pending   ┌──────────────────────────────┐
+│ 2. Plans waiting for approval├────────────────►│ Approve / Deny / Review, one │
+│                              │◄────────────────┤ plan at a time with the user │
+└──────────┬───────────────────┘                 └──────────────────────────────┘
+           │ none pending                                         ▲
+           ▼                                                      │ new plans
+┌──────────────────────────────┐                                  │
+│ 3. Fill the hierarchy        │  goals without projects ─► project-manager
+│    (parallel subagents)      │  projects without reqs  ─► project-manager
+│                              │  reqs without plans     ─► strategist ─────┘
+│                              │  open issues, no fix    ─► strategist ─────┘
+└──────────┬───────────────────┘
+           │ nothing missing, nothing pending
+           ▼
+┌──────────────────────────────┐
+│ 4. Execute ready plans       │  dispatch every ready plan, record each result,
+│    until none are left       │  dispatch what became ready, repeat
+│                              │  project done ─► reviewer × N ─► librarian
+└──────────┬───────────────────┘
+           ▼
+     5. Goals complete?  ─►  6. Wrap up
+```
 
-**Backend.** `backend:` in `.guild/config.yaml` decides which door the board has — `local`
-(the default, and what absence means) or `kumiai`. Every SQL block on this page is the local
-path and is unchanged. On `kumiai`, each one has a tool-call equivalent in `guild:warehouse` →
-`references/kumiai.md`, and the line under the block names the section. Read the backend once
-in Step 1 and **say it in every dispatch prompt** (3.3), because a subagent that guesses writes
-to the wrong board. Pass `workspace` from the config and `actor: "orchestrator"` on every write.
+**Load `guild:warehouse` first.** It has the connection steps, the hex rule for free text
+and the view catalog. Every SQL block here assumes it. There is no guild CLI: `tursodb` is
+the tool and you write the SQL.
 
-**References — load on demand, not upfront:**
+**References — load when you reach the step that needs them:**
 
-- `references/task-lifecycle.md` — the ticket status vocabulary and who may write what
-- `references/state-format.md` — what is on disk under `.guild/`, and what is derived
-- `references/workflow-compilation.md` — only when you want the **Workflow** tool to drive
-  a batch, or a run crashed mid-batch
-- `references/edge-cases.md` — a requirement with no execution graph (§3.7), no eligible
-  agent for a ticket (§3.8), and the CHANGELOG bullet on completion (§3.9)
+- `references/dispatch-prompts.md` — the exact prompt for every agent you spawn
+- `references/board-sql.md` — the exact writes: ids, approvals, moves, issues, docs
 
-## Core model
+## The rules underneath everything
 
-The board is a **database** (`.guild/guild.db`). **Status is a COLUMN.** There is no
-`BOARD.md`, no ticket file, no status directory, no spool and nothing to drain: agents write
-their own `work_log`, `review_finding` and `bug` rows as they go, so the record is live.
-
-Four rules sit underneath everything below:
-
-1. **You own every status transition — with no exceptions.** Agents report; they never move
-   anything. Every status-like column is yours and nobody else's: `task.status`,
-   `graph_node.status`, `gate.status`, and also `bug.status`, `plan.status`, `doc.status`,
-   `inspection.status` and `review_finding.disposition`. A member that finishes such an outcome
-   *reports* it (`BUG-004 re-verified fixed`, `doc DOC-B supersedes DOC-A`) and you make the move
-   in 3.4. Creating a row is not a move — agents still write their own content rows. **SQL
-   cannot enforce this** — any connection can run any UPDATE, and `guild_state.actor` is a
-   label, not an identity. It holds because you and the agent definitions honor it, and §7 C.b
-   of `docs/expectations.md` reports every `moved` event whose actor is a member.
-2. **A ticket names a CAPABILITY, not a member — and YOU do the matching.** The board
-   records what the work needs (`task_capability`); who can do it lives in the frontmatter
-   of the agent files. There is no matcher view. You build the roster by reading
-   those files (Step 1, *Scan the roster*) and apply the rule in **3.3**. A ticket with a
-   pinned `agent` skips the match entirely.
-3. **Subagents cannot ask the user.** `AskUserQuestion` works only in this session. Agents
-   relay through `NEEDS INPUT:` and you ask on their behalf. This is also *why* a gate can
-   never live inside a dispatched workflow.
-4. **A crash is recoverable from the board.** Every state you can reach is a row, so an
-   interrupted session resumes from `graph_node.status` and `task.status`.
-
-What decides the order:
-
-> **The execution graph is the chain.** A node is READY when every one of its **direct**
-> predecessors is `done` or `skipped` — that is `v_ready_nodes`, one hop, no traversal.
-> Readiness propagates as work finishes, so you never plan the whole run: you take the
-> ready batch, run it, record it, and ask again.
-
-**Exactly two gates per requirement, and only two.** `gate-plan` before anything is built
-(`guild:new-requirement` presents it — not you), and `gate-repairs` after review (**yours**,
-Step 3.5). Everything between them runs continuously. Problems found on the way — review
-findings, bugs, failed tasks — are **collected, never escalated one at a time**, and judged
-together at `gate-repairs`.
+1. **You own every status move.** `goal`, `project`, `requirement` and `plan` status,
+   `plan.approval`, `issue.status`, `project.reviewed_at` and `documented_at`, `doc.status`.
+   Agents create content rows (projects, requirements, plans, capabilities, dependencies,
+   logs, issues, docs, tags, doc links) and **report** outcomes. You make the move. SQL
+   cannot enforce this. It holds because you and the agent prompts honor it.
+2. **Read the view, do not re-derive the rule.** What is ready, blocked, stuck, waiting for
+   review or missing is one view each in `schema.sql`. Never write your own version.
+3. **Let the triggers roll status up.** A plan starting moves its requirement, project and
+   goal to `in-progress`. The last plan finishing closes its requirement, and the last
+   requirement closes its project. Do not write those moves yourself. Only a goal is
+   closed by hand (Step 5).
+4. **Subagents cannot ask the user.** Only you can call `AskUserQuestion`. An agent that
+   needs the user ends its message with `NEEDS INPUT:` and a numbered list. You ask those
+   exact questions, then `SendMessage` the answers to the **same** agent. A pause is not a
+   result: move nothing while one is open.
+5. **A plan names capabilities. You pick the agent** (Step 4.2). Never dispatch by habit.
+6. **Problems are reported, not fixed on the spot.** A failed plan, a review finding and an
+   out-of-scope discovery each become an `issue`. Issues get fix plans in Step 3, and fix
+   plans are approved like any other.
+7. **Guard every write and read what it returns.** Each `UPDATE` names the state it expects
+   (`AND status = 'open'`) and ends with `RETURNING`. Zero rows back means someone already
+   moved it. That is information, not an error.
 
 ## Running SQL
 
-`guild:warehouse` covers the connection, the hex rule, and the rest of the seven rules — this
-is the one addition for check-in's longer scripts: write to a scratch file with a **quoted**
-heredoc rather than piping, and set the actor before any write:
+Write scripts to a scratch file with a quoted heredoc, and set the actor before any write:
 
 ```bash
 export PATH="$HOME/.turso:$PATH"
-cat > /tmp/q.sql <<'SQL'
+cat > /tmp/guild-q.sql <<'SQL'
 PRAGMA foreign_keys = ON;
 UPDATE guild_state SET value = 'orchestrator' WHERE key = 'actor';
 SELECT fact, value FROM v_brief;
 SQL
-tursodb -q -m list .guild/guild.db < /tmp/q.sql
+tursodb -q -m list .guild/guild.db < /tmp/guild-q.sql
 ```
 
-On `kumiai` there is no script: each statement is one tool call, and one call is one
-transaction (`kumiai.md` §0).
+Free text (titles, feedback, reasons) always crosses as `CAST(x'<hex>' AS TEXT)`.
+
+**Backend.** Read `backend:` from `.guild/config.yaml`. **This version supports `local`
+only.** The Kumiai server still speaks the version 9 contract, which has tasks and an
+execution graph. If the config says `backend: kumiai`, stop and say: "The Kumiai backend has
+not moved to guild schema 10 yet. Check-in works on a local board until it does."
 
 ---
 
-## Step 1: Initialize or Load
+## Step 1 — Set up and report
 
-`.guild/config.yaml` is what says a guild exists here.
+### 1.1 The board
 
-### First check-in (no `.guild/config.yaml`)
-
-**First, ask which backend** — one **AskUserQuestion**, two options:
-
-- **Local** — the board is `.guild/guild.db` on this machine, through `tursodb`. The verified
-  path, and the default.
-- **Kumiai** — the board lives in a Kumiai workspace, shared with the team and visible in the
-  Kumiai UI, through the `kumiai` MCP server.
-
-**Local** → run the block at the end of this list as it stands, then greet them.
-
-**Kumiai** → nothing below applies until the config is written; there is no schema to apply,
-because Kumiai's Postgres carries the schema:
-
-1. **Is the server connected?** Look for tools named `mcp__kumiai__*` in this session. If there
-   are none, ask for the Kumiai URL and stop with:
-
-   ```
-   The kumiai MCP server is not connected. Add it at project scope, then authenticate:
-
-     claude mcp add --scope project --transport http kumiai <url>/mcp
-     /mcp   → select kumiai → Authenticate
-
-   Then check in again.
-   ```
-
-   The name must be exactly `kumiai` — every guild agent is granted `mcp__kumiai__*`, and a
-   server under any other name is a server no guild member can call.
-2. **`whoami`.** Refuse if `contract`'s **major** version is not `1` — say which version the
-   server speaks and stop. A guild calling a 2.x server with 1.x arguments writes plausible,
-   wrong rows.
-3. **`list_workspaces`**, then **AskUserQuestion**: one option per workspace (the default first),
-   plus **Create a new workspace**. On create, ask its name and call `create_workspace`. Never
-   pick one on their behalf — the workspace id decides whose board every later write lands on.
-4. **Write the config**, with the workspace **id** (not its name) and no credential — the OAuth
-   token lives in Claude Code, not in the repo:
-
-   ```bash
-   mkdir -p .guild/docs .guild/qa
-   cat > .guild/config.yaml <<'YAML'
-   # guild configuration. Committed to git.
-   version: 5
-   domain: software
-   backend: kumiai
-   kumiai:
-     url: https://<kumiai-host>
-     workspace: <workspace id>
-   YAML
-   printf 'dashboard.html\n' > .guild/.gitignore
-   ```
-
-Then skip the local block and greet them as it says — a fresh workspace is just as empty.
-
-**Local** — the block:
+**No `.guild/config.yaml`** — a first check-in. Create the board:
 
 ```bash
-mkdir -p .guild/docs .guild/qa
-tursodb .guild/guild.db < "${CLAUDE_PLUGIN_ROOT}/schema.sql"     # idempotent
+mkdir -p .guild
+tursodb .guild/guild.db < "${CLAUDE_PLUGIN_ROOT}/schema.sql"
 cat > .guild/config.yaml <<'YAML'
 # guild configuration. Committed to git.
-version: 5
-# Which domain profile the strategist plans with. `software` is the default and may be
-# omitted; any other value names a `guild:domain-<name>` skill that must exist.
+version: 6
 domain: software
-db:
-  mode: local
+backend: local
 YAML
 printf 'guild.db\nguild.db-*\nguild.db.*\ndashboard.html\n' > .guild/.gitignore
 ```
 
-Then greet them, say the board is empty, and ask what they want to work on. On an answer,
-invoke `guild:new-requirement` — it runs the project-manager + strategist interview, writes the
-plan, the tickets **and the execution graph**, and ends by presenting
-`gate-plan`. Then go to **Step 3**.
+**A config exists.** Check the version before anything else:
 
-### Returning check-in
+```sql
+SELECT version FROM schema_version WHERE id = 1;
+```
 
-1. **Re-apply the schema.** `tursodb .guild/guild.db < "${CLAUDE_PLUGIN_ROOT}/schema.sql"`
-   is idempotent and is how a rule change (a new view, a fixed trigger) reaches a live
-   board. Tables are `IF NOT EXISTS`, so data survives.
-   **On `kumiai`, skip it** — the server owns the schema. Call `whoami` instead and refuse a
-   contract major version other than `1`; if no `mcp__kumiai__*` tool is connected, stop and
-   give the `claude mcp add` line from *First check-in*.
-2. **Scan the roster.** The roster is not in the database — it is the frontmatter of every
-   subagent available to the user, and you read it fresh each session. **Skipping this
-   leaves you with no way to match a ticket.** Run:
+- **10** → re-apply the schema. It is idempotent, and re-applying is how a fixed view or
+  trigger reaches the board: `tursodb .guild/guild.db < "${CLAUDE_PLUGIN_ROOT}/schema.sql"`.
+- **Below 10, or no such table** → this is a version 9 board with tasks and graphs. Schema 10
+  is a fresh start, and nothing converts it. **Check-in only:** ask with `AskUserQuestion`:
+  **Archive and start fresh** (rename `.guild/guild.db` to `.guild/guild.v9.db`, create a new
+  board as above, set `version: 6` in the config) or **Stop**. Never delete the old file.
+  A shift stops here and reports it.
 
-   ```bash
-   python3 "${CLAUDE_PLUGIN_ROOT}/skills/check-in/scripts/roster.py"
-   ```
+### 1.2 The roster
 
-   It prints one line per member — `name | model | serial | capabilities` — gathered from
-   every place a subagent can live: this plugin's `agents/`, the project's `.claude/agents/`,
-   the user's `~/.claude/agents/`, and every other installed plugin's. **Keep that output
-   for the rest of the session**: it is what 3.3 matches against, and re-reading it is
-   cheaper than guessing.
+The roster is not in the database. It is the frontmatter of every subagent available to the
+user. Read it fresh each session and keep the output:
 
-   The script prints a `WARN` line for any file it could not read a `name` from, and lists
-   agents that declare no `capabilities:` at all. An agent with no capabilities can still be
-   PINNED by name; it simply never wins a capability match. Report those rather than routing
-   around them — the fix is a line of frontmatter in the agent file.
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/check-in/scripts/roster.py"
+```
 
-   **There is no vocabulary table and no sync step.** A capability is legal exactly
-   when some agent file declares it, so adding a member is writing its file — nothing to
-   INSERT, nothing to keep in step, and a new agent file works on the very next check-in.
-3. **Recover anything the last session left running.** The node is the authoritative half:
+Each line is `name | model | serial | scope | capabilities`. An agent listed in the files but
+missing from this session's available agent types is absent. The session list wins.
 
-   ```sql
-   SELECT json_object('id', t.id, 'req', t.requirement_id, 'title', t.title,
-                      'node', COALESCE((SELECT n.id FROM graph_node n
-                                         WHERE n.task_id = t.id AND n.status = 'running' LIMIT 1), ''),
-                      'logs', (SELECT COUNT(*) FROM work_log w WHERE w.task_id = t.id),
-                      'last', COALESCE((SELECT w.entry FROM work_log w WHERE w.task_id = t.id
-                                         ORDER BY w.ts DESC, w.id DESC LIMIT 1), ''))
-     FROM task t WHERE t.status = 'in-progress' ORDER BY t.id;
+### 1.3 Recover what the last session left running
 
-   SELECT id, requirement_id, node_key, status FROM graph_node
-    WHERE status = 'running' ORDER BY id;
+A plan `in-progress` with no execution issue should have an agent on it. If this session
+did not start that agent, the last session died:
 
-   SELECT node_id, requirement_id, kind, prompt FROM v_gates_pending;
-   ```
+```sql
+SELECT json_object('id', r.id, 'agent', r.claimed_by, 'minutes', r.minutes,
+                   'logs', (SELECT COUNT(*) FROM plan_log l WHERE l.plan_id = r.id),
+                   'last', COALESCE((SELECT l.entry FROM plan_log l WHERE l.plan_id = r.id
+                                      ORDER BY l.ts DESC, l.id DESC LIMIT 1), ''))
+  FROM v_plans_running r;
+```
 
-   On `kumiai`: `list task where status = "in-progress"`, then `list work_log where task_id`
-   per ticket (newest last), `list graph_node where status = "running"`, and `read_view
-   v_gates_pending` — `kumiai.md` §0 and §3.
+- **No log entries** → it never really started. Set it back: `UPDATE plan SET status = 'open',
+  claimed_by = NULL, started_at = NULL WHERE id = ? AND status = 'in-progress' RETURNING id`.
+- **The last entry reports done or failed** → the session died after the agent finished.
+  Record it now with Step 4.4. Do not run it again.
+- **Anything else** → dispatch it again in Step 4 with the RESUMED prompt.
 
-   - **`logs = 0`** → never started → `UPDATE task SET status = 'todo'`, and if a node was
-     bound to it, `UPDATE graph_node SET status = 'pending'`.
-   - **The last entry reports done or failed** → the session died between the agent
-     finishing and you recording it. Do NOT re-dispatch: run **Step 3.4** for it now.
-   - **Anything else** → leave it; Step 3.3 resumes it with the RESUMED-TASK prompt.
+Also check for projects that finished while nobody was watching. `v_projects_to_review`
+and `v_projects_to_document` are picked up in Step 4, so nothing is lost.
 
-   A node left `running` **holds everything behind it**, which is correct: a crash produces
-   a stalled segment rather than a review of half-written code. A pending gate is never
-   "stale" — it is waiting for the guild master.
-4. Proceed to **Step 2**. **Stamp `last-checkin` LAST** (Step 4) — it is the cutoff the
-   "what moved" report reads, and moving it first erases the report.
-
----
-
-## Step 2: Report & Route
-
-Read the standup and its detail lists. The counts and the lists come from the same views, so
-they cannot disagree:
+### 1.4 Report
 
 ```sql
 SELECT fact, value FROM v_brief;
-SELECT * FROM v_goal_progress;
-SELECT id, requirement_id, who, minutes, title FROM v_in_flight;
-SELECT id, requirement_id, status, who, reason, title FROM v_blocked_tasks;
-SELECT id, severity, status, found_by, requirement_id, title FROM v_open_bugs;
-SELECT id, who, waived, reason, title FROM v_failed_tasks;
-SELECT id, task_id, reviewer, severity, disposition, file, line, summary FROM v_open_findings;
-SELECT node_id, requirement_id, kind, prompt FROM v_gates_pending;
-SELECT id, requirement_id, status, gate_node_id, title FROM v_plans_pending_approval;
+SELECT id, status, projects_total, projects_done, title FROM v_goal_progress WHERE status <> 'done';
+SELECT id, project_id, source, severity, status, title FROM v_open_issues;
+SELECT id, issue_id, issue_title, title FROM v_plans_stuck;
 SELECT json_object('ts', ts, 'actor', actor, 'verb', verb, 'type', subject_type,
                    'id', subject_id, 'title', subject_title, 'phrase', phrase)
   FROM v_recent_activity
  WHERE ts >= COALESCE(NULLIF((SELECT value FROM guild_state WHERE key = 'last-checkin'), 'null'), '')
- ORDER BY ts DESC LIMIT 50;
+ LIMIT 50;
 ```
 
-On `kumiai`: one `read_view` per view above, and the activity feed per `kumiai.md` §3 *What
-moved* — the cutoff is `where: {ts: {op: ">=", value: <last-checkin>}}`.
+**Tell the user in four or five lines, do not paste rows:**
 
-**Narrate it — do not paste the rows.** Three or four lines is right at check-in:
+- which goals are open and how far along each is
+- what is waiting on them: plans to approve, goals to sign off (`goals_complete`)
+- the risks, worst first: critical issues by name, stuck plans with their issue
+- what moved since the last check-in, grouped by subject
 
-- which goal/project the work serves, if `v_goal_progress` has rows — and if `projects_runnable`
-  is more than 1, name every project in flight, not just one;
-- what is in flight and for how long — `minutes` in the **hundreds** on a task that normally
-  takes minutes is a crashed dispatch, not work in progress; say so;
-- the risks, worst first: open bugs (name every `critical` one), unresolved failed tasks with
-  the reason from `v_failed_tasks.reason`, review findings with `file:line`;
-- **anything in `v_blocked_tasks`, by name.** It never resolves on its own and it will never
-  be handed out. A `status-blocked` row is a gap in the roster and its `who` names the
-  capability that would fill it — that is the agent file somebody needs to write. If
-  `bounties_open` is 0 and `bounties_stuck` is not, that **is** the headline;
-- **what is waiting on the guild master** — every `v_gates_pending` row is a decision that
-  cannot progress without them. Name it. **`v_plans_pending_approval` belongs in the same
-  breath**: a drafted plan nobody has ruled on blocks every ticket under it, and a row there
-  with an empty `gate_node_id` has no gate to surface it — without this line it is invisible;
-- what moved since the last check-in, summarized by subject rather than recited by timestamp.
+### 1.5 Route
 
-**Empty guild** (`requirements_open` and `requirements_done` both 0): say the board is empty
-and that they can say "new requirement". **Do not auto-invoke it** — the interview is a live
-multi-agent session and should start only when the user engages.
+**Work intent** ("let's get to work", "continue", "start working") → say
+`Starting the flow — say 'stop' or give new direction anytime.` and go to Step 2.
 
-**Work intent — resume without asking.** If the invoking phrase expresses work intent ("let's
-get to work", "continue", "start working") AND anything is runnable or any gate is pending,
-do NOT ask a routing question. Give the short narration plus one line — `Resuming: {REQ-NNN}
-— say 'stop' or give new direction anytime.` — and go straight to **Step 3**.
+**Empty board** (`goals_open` is 0) → **check-in only:** ask what they want to achieve, then
+invoke `guild:new-goal`. Then go to Step 2.
 
-**Otherwise** (ambiguous triggers like "check in", "standup", "I'm here"), call
-**AskUserQuestion** with one question and these options:
+**Anything else** ("check in", "I'm here") → **check-in only:** one `AskUserQuestion`:
 
-- **Continue working** → **Step 3**
-- **New requirement** → invoke `guild:new-requirement`, then **Step 3**
-- **Review completed work** → read recent tickets and their work logs, ask if anything needs
-  rework; then **Step 3**
-- **Adjust the backlog** → `SELECT * FROM v_board WHERE section_no = 3`; retitle with an
-  `UPDATE task SET title = CAST(x'…' AS TEXT)` (kumiai: `read_view v_board` with
-  `where: {section_no: 3}`, then `update_task`); then **Step 3**
-- **Other** (they describe work) → invoke `guild:new-requirement` with it as context
+- **Continue the flow** → Step 2
+- **New goal** → invoke `guild:new-goal`, then Step 2
+- **Just the status** → stop after the report. Do not stamp `last-checkin`.
 
 ---
 
-## Step 3: The Work Cycle
-
-### 3.1 Pick a requirement, and read its ready nodes
+## Step 2 — Plans waiting for approval
 
 ```sql
-SELECT id, status, priority, tasks_open, tasks_blocked, tasks_failed, title
-  FROM v_requirement_progress WHERE status <> 'done';
+SELECT id, requirement_id, project_id, goal_id, kind, has_capabilities, title
+  FROM v_plans_pending_approval;
 ```
 
-Take the lowest-id `in-progress` requirement, else the lowest-id `todo` one. Then ask the
-graph what is runnable — **this is the segment query, and it mutates nothing**:
+**Nothing pending** → Step 3.
+
+**A plan with `has_capabilities = 0`** names no agent and no capability, so nobody could
+run it. Do not offer it for approval. Send it back to its strategist (Step 3 prompt,
+*revise*) with the note "name the capabilities this plan needs", and move on.
+
+### 2.1 Check-in only — one decision per plan, with the user
+
+For each pending plan, show a short card. Read what you need with the queries in
+`references/board-sql.md` § *Plan card*:
+
+```
+PLAN-014  build · REQ-006 Sign-up form · PROJ-002 User registration · GOAL-001 Build a CMS
+  Needs:      implement + svelte          Depends on: PLAN-012
+  Files:      src/routes/signup/+page.svelte, src/lib/server/users.ts
+  Summary:    {the first paragraph of the plan body}
+```
+
+Then `AskUserQuestion`, **one question per plan, up to four plans per call**, each with:
+
+- **Approve** → `approval = 'approved'`, `approved_by = 'user'`.
+- **Deny** → `approval = 'rejected'`, `approved_by = 'user'`. Ask for the reason in the same
+  breath and write it to `plan_log`. A requirement whose only plans are denied appears again
+  in Step 3, and the strategist writes a new plan with the reason in hand.
+- **Review** → print the **full** plan body, its capabilities, dependencies and files. Then
+  ask one more question: **Approve**, **Deny**, or **Request changes** (the user types the
+  change in "Other"). On changes, send them to the strategist that wrote the plan:
+  `SendMessage` the same instance if it is still open in this session, otherwise spawn
+  `guild:strategist` with the *revise* prompt. The strategist edits the plan in place and
+  approval stays `pending`. Show the revised card and ask again. Repeat until the user
+  approves or denies.
+
+Write every decision with the guarded statements in `references/board-sql.md` §
+*Approve or deny*. Then go back to the top of Step 2, because a revision or a new plan may
+be waiting.
+
+### 2.2 Shift only — the orchestrator decides
+
+A shift approves a pending plan on its own when the plan traces to a goal and a project
+(every plan does, by schema), has `has_capabilities = 1`, and every plan it depends on
+exists and is not rejected. Write `approved_by = 'orchestrator'`. Anything else stays
+pending for the user. `guild:shift` has the details.
+
+---
+
+## Step 3 — Fill the hierarchy
+
+Ask the board what is missing:
 
 ```sql
-SELECT json_object('node', n.id, 'key', n.node_key, 'kind', n.kind,
-                   'group', n.parallel_group,
-                   'task', COALESCE(n.task_id, ''),
-                   'pin', COALESCE((SELECT t.agent FROM task t WHERE t.id = n.task_id), ''),
-                   'needs', COALESCE((SELECT group_concat(c.capability, '+')
-                                        FROM (SELECT capability FROM task_capability
-                                               WHERE task_id = n.task_id AND required = 1
-                                               ORDER BY capability) c), ''),
-                   'gate', COALESCE(n.gate_status, ''), 'gate_kind', COALESCE(n.gate_kind, ''),
-                   'prompt', COALESCE(n.gate_prompt, ''))
-  FROM v_ready_nodes n
- WHERE n.requirement_id = 'REQ-NNN'
- ORDER BY n.node_key, n.parallel_group, n.id;
+SELECT 'goal'        AS level, id, title FROM v_goals_without_projects
+UNION ALL
+SELECT 'project',     id, title FROM v_projects_without_requirements
+UNION ALL
+SELECT 'requirement', id, title FROM v_requirements_without_plans;
+
+SELECT id, project_id, requirement_id, severity, title FROM v_open_issues
+ WHERE fix_plan_id IS NULL AND status = 'open';
 ```
 
-On `kumiai`: `read_view v_ready_nodes` with `where: {requirement_id}` and the same `order_by`,
-then `get task` for each bound node — its `agent` is `pin`, its `required: true` capabilities
-are `needs` (`kumiai.md` §4 *Find what is ready*, §5).
+**Everything empty** → nothing is missing. If Step 2 also found nothing pending, go to
+Step 4. Otherwise go back to Step 2.
 
-Four outcomes, and each has one right move:
+**Otherwise spawn one agent per item, all in one message, so they run in parallel.** The
+prompts are in `references/dispatch-prompts.md`:
 
-| What comes back | What it means | Do |
+| Missing | Agent | It writes |
 |---|---|---|
-| rows with `kind = work` | ordinary work | **3.2** |
-| only a `kind = gate` row | the run reached the gate | **3.5** (`gate-repairs`) or hand `gate-plan` back |
-| nothing, but nodes are `running` / `failed` | something is still held | resolve it (3.4), or move to another requirement |
-| nothing, and every node is `done` / `skipped` | the graph is exhausted | **3.6** — close the requirement |
+| a goal's projects | `guild:project-manager`, *projects* prompt | `project` rows and `project_dependency` |
+| a project's requirements | `guild:project-manager`, *requirements* prompt | `requirement` rows and `requirement_dependency` |
+| a requirement's plans | `guild:strategist`, *plans* prompt | `plan` rows (build, and test plans that depend on them), `plan_capability`, `plan_dependency` |
+| a fix for an open issue | `guild:strategist`, *fix* prompt | one `fix` plan per issue, with capabilities and dependencies |
 
-Check the held case explicitly before believing "nothing to do":
+Group fix issues by project and send one strategist per project, so related issues share
+one fix plan when that is the better design.
+
+**Check-in only — the project-manager interviews the user.** Each project-manager asks its
+questions through `NEEDS INPUT:`. Several may be open at once, so put the agent's subject in
+front of every question you relay: `[GOAL-002 Build a CMS] Who are the editors?`. Answer
+each agent with `SendMessage`. **In a shift there is no user**, and the project-manager
+writes from the goal, the codebase and the docs alone.
+
+**When an agent reports**, read back what it wrote before believing it:
 
 ```sql
-SELECT id, node_key, status FROM graph_node
- WHERE requirement_id = 'REQ-NNN' AND status NOT IN ('done', 'skipped') ORDER BY id;
+SELECT id, goal_id, title FROM project WHERE goal_id = ?;
+SELECT id, project_id, title FROM requirement WHERE project_id = ?;
+SELECT id, requirement_id, kind, approval, title FROM plan WHERE requirement_id = ?;
 ```
 
-(kumiai: `list graph_node` with `where: {requirement_id: "REQ-NNN", status: ["pending",
-"ready", "running", "failed"]}` — the `NOT IN` written as the statuses that remain.)
+**A fix plan the strategist reports** gets linked to its issue by you, because the issue's
+status is yours to move (`references/board-sql.md` § *Link a fix plan*).
 
-**No `graph_node` rows at all** → this requirement predates the graph, or the strategist never
-built one. Do not improvise a chain. Go to **3.7**.
+**Repeat Step 3 until it finds nothing missing.** New projects have no requirements yet, and
+new requirements have no plans, so the cascade takes up to three rounds:
+projects, then requirements, then plans. Every new plan is `pending`, so after the cascade
+go back to **Step 2**. This is the loop in the diagram. It ends when Step 2 has nothing
+pending **and** Step 3 has nothing missing.
 
-**A pending `gate-plan` is not yours.** `guild:new-requirement` presents it. Say so, offer to
-hand it back to that skill, and never approve it yourself or build past it.
+**Denied plans.** A strategist writing plans for a requirement whose earlier plans were
+denied must see why. The *plans* prompt tells it to read `plan_log` for the rejected plans
+first.
 
-**An approved `gate-plan` over a `pending` plan is a drift, not a green light.** Approving is
-three writes — the gate, the node, and `plan.approval` — and a board where the first two landed
-and the third did not will show the plan in `v_plans_pending_approval` forever. Say which it is
-before you dispatch: if the gate carries an approval decision, the fix is the missing write
-(`UPDATE plan SET approval='approved', approved_by='user', approved_at=…, gate_node_id=…`), and
-it is the guild master's word you are recording, not a new decision. If the gate is genuinely
-undecided, hand it back and build nothing.
+---
 
-### 3.2 Advance the requirement, and form ONE batch
+## Step 4 — Execute ready plans until none are left
 
-If the requirement is still `todo`: `UPDATE requirement SET status = 'in-progress' WHERE id =
-'REQ-NNN' AND status = 'todo' RETURNING id, status;` (kumiai: `update_requirement
-{status: "in-progress", expect_status: "todo"}`).
+This step runs continuously. You never queue the whole board. You dispatch what is ready,
+and each finished plan may make more plans ready.
 
-Then cut the ready **work** nodes into one batch and run only that one. Readiness propagates
-as work finishes, so you re-run the segment query after every batch — **you never queue the
-whole graph blind.**
+### 4.1 What is ready
 
-**The template is the ceiling; the data is the grouping.**
+```sql
+SELECT json_object('id', id, 'kind', kind, 'agent', agent, 'needs', needs,
+                   'project', project_id, 'isolation', isolation,
+                   'worktree', worktree_path, 'files', json(files), 'title', title)
+  FROM v_plans_ready;
+```
 
-1. Read the template that shaped this graph — `guild:warehouse` →
-   `references/templates/standard.md` or `maintenance.md`, overridden by
-   `.guild/templates/*.yaml` when present — and find the entry whose `key:` matches the
-   node's `node_key`.
-2. `parallel: by-group` or `parallel: all` → nodes sharing a **non-empty** `parallel_group`
-   run **concurrently**. The strategist asserted their file sets are disjoint
-   (`task.files`). Nodes with no group are not concurrent with anything.
-3. `parallel: never`, no `parallel:` line, or a key in **neither** template → **one node, one
-   batch.** This is an invariant, not a tuning knob: `qa-execute` drives a real app and a real
-   dev server, and two at once collide.
-4. **Then, independently: never two `serial = 1` members in one concurrent batch.** The
-   segment query returns each node's `serial`. If a batch would hold two, **stop and report
-   it** — do not silently serialize. The template rule and the serial rule cover each other's
-   blind spots (a template says nothing about an added node; a serial flag says nothing about
-   a node with no ticket yet).
+`v_plans_ready` already checks approval, status and dependencies at every level: the plan's
+own, its requirement's, its project's and its goal's. Do not add checks of your own.
 
-Take the first batch in `node_key` order and nothing else. If concurrency looks wrong, that is
-a graph problem — read `graph_deviation` for the reason somebody recorded.
+Pick the plans to start now, in the order the view returns them, skipping a plan when:
 
-### 3.3 Dispatch a node
+- **Its files overlap a plan that is running or already picked.** Two agents must never edit
+  one file in one working tree. Plans in a `worktree` project only conflict with plans in
+  the same project.
+- **Its agent is `serial` and another serial agent is running.**
+- **Its project is `worktree` and `worktree` is empty.** Cut the worktree first (`git worktree
+  add`), write the path to `project.worktree_path`, then dispatch.
 
-For each node in the batch:
+A skipped plan stays `open`. It is picked up when the conflict ends.
 
-**1. Find its ticket.** The segment query's `task` field is the binding.
+### 4.2 Pick the agent
 
-- **Bound** → use it.
-- **Unbound** (`task` is empty) → the node is one the strategist could not bind unambiguously
-  (`test-plan`, `qa-plan`, `document`, every `review.*`). Find the requirement's open ticket for
-  that work:
+Apply this to each plan, against the roster from 1.2, and stop at the first rule that
+answers:
 
-  ```sql
-  SELECT id, priority, who, parallel_group, title FROM v_open_bounties
-   WHERE requirement_id = 'REQ-NNN' ORDER BY priority, id;
-  ```
-
-  Pick the one whose title and `who` (`needs:…`) match the node's key — `test-plan` takes the
-  `needs:test-planning` bounty, `review.*` takes the reviewer ticket, `document` takes the
-  `needs:document` bounty — then **bind it** when you move the node, so nobody has to guess
-  again.
-- **Unbound and no bounty for it** → the node is an **anchor** for a fanout that has not
-  happened yet. See *Anchors* below.
-
-**A `skipped` node is never dispatched.** The strategist marks the test and review steps a
-requirement does not need as `skipped` when it builds the graph, with a deviation row that says
-why (`SELECT reason FROM graph_deviation WHERE requirement_id = 'REQ-NNN'`). `v_ready_nodes`
-offers `pending` nodes only, and `skipped` counts as finished for its successors, so you will
-simply never be handed one — and there is no ticket under it to find. If you do find an open
-ticket whose node is `skipped`, that is a plan error: report it, do not run it.
-
-**Never dispatch straight from `v_open_bounties`.** It answers "does this ticket ask for
-somebody", not "may this run yet". **The graph is the ordering; the bounty board only says
-the ticket is ready to be matched.**
-
-**2. Resolve the member — YOU run the match.** The segment query gives you two facts per
-ticket: `pin` and `needs`. Apply them against the roster you scanned in Step 1, in this
-order, and stop at the first that answers:
-
-| | condition | what you do |
+| | When | Do |
 |---|---|---|
-| **pin** | `pin` is non-empty | Dispatch that member. **Do not run the capability match** — a pin is a decision the strategist already made, and it wins even when the member covers none of the ticket's capabilities. |
-| **capability** | `pin` empty, `needs` non-empty | ELIGIBLE = every roster member whose `capabilities` are a **superset** of `needs`. Rank the eligible and take the first. |
-| **nobody** | no pin, and nothing eligible | → **3.8**. Never improvise a substitute. |
+| **pin** | `agent` is not `-` | Dispatch that agent. Skip the match. |
+| **match** | `needs` is not `-` | Eligible = every agent whose capabilities include **all** of `needs`. Rank by: most preferred capabilities covered (`required = 0` rows), then fewest declared capabilities (the specialist wins), then name. Take the first. |
+| **nobody** | no pin, nothing eligible | Do not dispatch and do not substitute. Leave the plan `open` and list it in the wrap-up as a roster gap, naming the capability nobody declares. |
 
-**The ranking, in order, and every key earns its place:**
-
-1. **most PREFERRED capabilities covered, DESC.** Preferred rows are `required = 0` in
-   `task_capability`. They never make anyone eligible or ineligible — they only break ties.
-2. **FEWEST declared capabilities, ASC.** A specialist beats a generalist. This is why the
-   sort is ascending on a number that looks like it should descend.
-3. **name ASC.** Not a tiebreak of convenience — it is what makes the answer
-   **deterministic**, which is the property that lets you dispatch rank 1 without exercising
-   judgment. Two check-ins on the same board must pick the same member.
-
-For a ticket you found yourself rather than through the segment query:
-
-```sql
-SELECT COALESCE(t.agent, '') AS pin,
-       COALESCE((SELECT group_concat(c.capability || ':' || c.required, ' ')
-                   FROM (SELECT capability, required FROM task_capability
-                          WHERE task_id = t.id ORDER BY required DESC, capability) c), '') AS caps
-  FROM task t WHERE t.id = 'TASK-NNN';
-```
-
-`caps` prints each tag with its `required` flag, so `implement:1 svelte:1 frontend:0` reads
-as "must have implement and svelte, prefers frontend".
-
-Then let the scanner do the superset test and the last two ranking keys for you:
+The script does the superset test and the last two ranking keys:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/skills/check-in/scripts/roster.py" --covers implement,svelte
 ```
 
-It prints only members covering **all** of those, already ordered specialist-first then by
-name. **No output means no eligible member** → 3.8. When more than one row comes back and the
-ticket has preferred capabilities, apply key 1 yourself over those rows — the script cannot
-see the ticket.
+### 4.3 Start each plan
 
-**A required capability no roster member declares is the whole point of declaring it.** Do
-not soften the superset test, and do not treat a near-miss as a match: the ticket goes to
-3.8 and the board says which word nobody has.
-
-**There is no reviewer special case.** The `review` node **is** four nodes, one per named
-reviewer, and the node id says which: `REQ-007/review.reviewer-security` dispatches
-`guild:reviewer-security`. The suffix after the `.` is the member.
-
-**3. Move the ticket and the node, in that order.**
+Move it, then spawn the agent **in the background**, all picked plans in one message:
 
 ```sql
-PRAGMA foreign_keys = ON;
-UPDATE guild_state SET value = 'orchestrator' WHERE key = 'actor';
-
-UPDATE task SET status = 'in-progress', claimed_by = 'developer',
-                claimed_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
- WHERE id = 'TASK-011' AND status = 'todo'
+UPDATE plan SET status = 'in-progress', claimed_by = 'developer-svelte',
+                started_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+ WHERE id = 'PLAN-014' AND status = 'open' AND approval = 'approved'
 RETURNING id, status, claimed_by;
-
-UPDATE graph_node SET status = 'running', task_id = 'TASK-011'
- WHERE id = 'REQ-007/implement.auth-service' AND status IN ('pending','ready')
-RETURNING id, status, task_id;
 ```
 
-On `kumiai` (`kumiai.md` §2, §4 *Run a node*): `set_task_status {key: "TASK-011", status:
-"in-progress", expect_status: "todo", claimed_by: "developer"}`, then `set_node_status {node:
-"REQ-007/implement.auth-service", status: "running", expect_status: ["pending", "ready"],
-task: "TASK-011"}`, both with `actor: "orchestrator"`. `claimed_by` names the member; `actor`
-keeps the move yours. **Never pass the member as `actor`** — that attributes the move to the
-member, which is the breach §7 of the expectations catches. `CONFLICT` is the zero-rows case.
+The *execute* prompt is in `references/dispatch-prompts.md`. A plan recovered in 1.3 gets
+the RESUMED line in front.
 
-Zero rows back means somebody already moved it — information, not an error. Set `task_id`
-only when the node is unbound; **a fanned-out key shares one ticket at most once** — the four
-`review.*` nodes share a single reviewer ticket, so bind one and move the others by id alone.
+Say one line per start: `Started PLAN-014 Sign-up form (developer-svelte).`
 
-**4. Spawn with the Agent tool.** Each agent's own definition carries its close-out protocol;
-the prompt stays minimal:
+### 4.4 Record each result as it arrives
 
-```
-Agent(
-  subagent_type: "guild:{member}",
-  prompt: "Your task is TASK-NNN, for REQ-NNN. There are no ticket files — load the
-           guild:warehouse skill and read your ticket, your requirement and your plan
-           from the board. Your brief is the ticket's `objective`.
-           Today's date: {today}
-
-           BACKEND: {local | kumiai}.
-           {local:  the board is .guild/guild.db — read and write it with SQL via tursodb.}
-           {kumiai: the board is Kumiai workspace {workspace id} — use the mcp__kumiai__*
-                    tools per guild:warehouse references/kumiai.md, pass that workspace
-                    and your own name as `actor` on every call, and do NOT open
-                    .guild/guild.db. If no mcp__kumiai__* tool is available to you,
-                    report failed and say so — never fall back to tursodb.}
-
-           Record your progress as you go — one work-log entry per meaningful outcome
-           (local: INSERT INTO work_log, your own name in `agent`, the entry as
-           CAST(x'<hex>' AS TEXT); kumiai: log_work). That log is what makes an
-           interrupted task resumable, and it is the only thing I read back when you
-           are done.
-
-           Anything you find that is OUT OF SCOPE for this ticket — a bug, a gap, a
-           follow-up — file it as a `bug` row and keep going. Do not stop for it. It is
-           collected and judged with everything else at the repairs gate.
-
-           Report done or failed in your final message. Do NOT change ANY status —
-           not task.status, graph_node.status or gate.status, and not a bug's, a
-           plan's, a doc's, an inspection's or a finding's disposition (kumiai: never
-           call set_task_status, claim_task, set_node_status, resolve_gate,
-           update_bug/update_plan/update_inspection with a status, update_finding or
-           supersede_doc). The orchestrator owns every transition, no exceptions: put
-           the outcome in your report instead — e.g. `BUG-004 re-verified fixed`,
-           `doc adr-x-v2 supersedes adr-x: <reason>` — and I make the move."
-)
-```
-
-**Resumed ticket?** If it was already `in-progress` with a non-empty work log, prepend:
-
-```
-RESUMED TASK: a prior agent already worked on this ticket — read its work_log first and
-continue from the last entry; do not redo logged work.
-```
-
-**Anchors (`fanout: per-declaration`, `per-approved-finding`, `per-mission`).** These nodes
-exist as one node and stand in for tickets that do not exist yet — `test-write` before the
-test-planner declared any, `repair` before the gate approved anything. Dispatch **every**
-ticket the anchor covers, one at a time unless the node says otherwise, then move the anchor
-`done` **once**, when they are all finished. The anchor is the barrier; the tickets are the
-work.
-
-**An anchor with zero tickets is closed `skipped`, not `done`** — the test-planner declared no
-tests (a `checks` plan), or the repairs gate approved nothing. `skipped` says "this step had
-nothing to do" and is what the board should show; `done` would claim work that never happened.
-Move it in the same statement you would have used, with `'skipped'`.
-
-**Interview relay — applies to every agent.** No subagent can reach the user. Any agent's
-final message may, instead of a done/failed report, end with:
-
-```
-NEEDS INPUT:
-1. {question}
-2. {question}
-```
-
-When you see it: call **AskUserQuestion** yourself with exactly those questions, then
-**`SendMessage` the same agent instance** with the answers. Repeat until it reports
-done/failed. A `NEEDS INPUT:` pause is neither a completion nor a failure — **do not move the
-ticket, do not move the node, and never answer on the user's behalf.**
-
-### 3.4 Record the results
-
-The batch is finished when every agent in it has reported. For **each** node, read what
-actually happened — the agent wrote it as it went, so there is nothing to drain:
+Do not wait for the whole group. When an agent reports, read its log, then record:
 
 ```sql
 SELECT json_object('ts', ts, 'agent', agent, 'entry', entry)
-  FROM work_log WHERE task_id = 'TASK-011' ORDER BY ts, id;
-SELECT id, reviewer, severity, disposition, file, line, summary
-  FROM review_finding WHERE task_id = 'TASK-011' ORDER BY id;
+  FROM plan_log WHERE plan_id = 'PLAN-014' ORDER BY ts, id;
 ```
 
-On `kumiai`: `list work_log where {task_id}` and `list review_finding where {task_id}`, both
-ordered by `id`.
-
-Then record it. **Both halves, always** — the ticket is the record, the node is the ordering,
-and a node left `running` silently stalls everything behind it:
-
-| The agent reported | Ticket | Node |
-|---|---|---|
-| done | `UPDATE task SET status='done' WHERE id='TASK-011' AND status='in-progress' RETURNING id,status;` | `UPDATE graph_node SET status='done' WHERE id='REQ-007/…' AND status='running' RETURNING id,status;` |
-| failed | `UPDATE task SET status='failed' WHERE id='TASK-011' RETURNING id,status;` | `UPDATE graph_node SET status='failed' WHERE id='REQ-007/…' RETURNING id,status;` |
-
-Do not set `updated_at` — a trigger stamps it, and another writes the `event` row.
-(kumiai: `set_task_status` with `expect_status: "in-progress"`, then `set_node_status` with
-`expect_status: "running"` — `kumiai.md` §2, §4.)
-
-**Then make the moves the report names.** A member never moves anything but reports what it
-established, and each of these lines is a move only you make, in the same step as closing its
-ticket:
-
-| The report says | Your move (as `orchestrator`) |
+| The agent reported | Your move |
 |---|---|
-| `BUG-004 re-verified fixed` (a qa-tester re-verify) | `UPDATE bug SET status='fixed' WHERE id='BUG-004' AND status IN ('open','fixing') RETURNING id,status;` (kumiai: `update_bug {key, status: "fixed", expect_status: ["open","fixing"]}`) |
-| `BUG-004 still broken: …` | nothing — the bug stays; the ticket is `failed` per the table above |
-| `doc adr-x-v2 supersedes adr-x` (the librarian) | the `supersedes` edge and `UPDATE doc SET status='superseded'`, in that order — `queries.md` §1 *Supersede* (kumiai: `supersede_doc {old_slug: "adr-x", new: {slug: "adr-x-v2"}}`, no title or body: the librarian already wrote the page) |
+| **done** | `UPDATE plan SET status = 'done', finished_at = <now> WHERE id = ? AND status = 'in-progress' RETURNING id, status`. The triggers close the requirement and project when this was the last plan. |
+| **failed** | File an `execution` issue against the plan with the agent's reason (`references/board-sql.md` § *File an issue*). **The plan stays `in-progress`** and shows in `v_plans_stuck`. Do not ask the user and do not stop the run: other plans keep going. The issue gets a fix plan on the next pass through Step 3. |
+| **`NEEDS INPUT:`** | Check-in: relay it (rule 4). Shift: answer only from the plan, the requirement and the docs, and if that is not enough, treat it as **failed** with the questions as the reason. |
 
-Do not take the member's word for an id you cannot read back: `get` / `SELECT` the row first, and
-a guarded UPDATE that returns zero rows means somebody moved it already — say so.
+Agents file their own out-of-scope finds as `discovered` issues. You do nothing with
+those here. Step 3 gives them fix plans.
 
-**A failure does not stop the run and does not ask the user.** That is what the two-gate
-model buys: a failed node holds its own successors, the rest of the graph keeps going, and
-the failure is **collected** and judged at `gate-repairs` alongside every finding and bug.
-(The one exception is a failure that stalls the *whole* requirement with nothing else
-runnable — then say so and ask.)
+**A stuck plan whose issue is resolved.** When an execution issue reaches `done` (its fix
+plan finished), decide for the stuck plan: set it back to `open` to run again, or to
+`done` if the fix covered it. Say which and why in `plan_log`.
 
-**Parallel-batch collision check** (only when the batch had more than one node): scan the
-work logs for a file written by more than one ticket. If you find one, the strategist's
-disjoint-file assertion was wrong — that is a finding for the gate, not an interruption:
+### 4.5 After each result, look again
+
+Run these three, every time:
 
 ```sql
-INSERT INTO bug (id, title, body, repro, severity, found_by, requirement_id, created_at, updated_at)
-SELECT 'BUG-' || printf('%03d', COALESCE(MAX(CAST(substr(id, instr(id,'-')+1) AS INTEGER)),0)+1),
-       CAST(x'<hex>' AS TEXT), '', '', 'major', 'orchestrator', 'REQ-NNN',
-       strftime('%Y-%m-%dT%H:%M:%SZ','now'), strftime('%Y-%m-%dT%H:%M:%SZ','now')
-  FROM bug
-RETURNING id;
+SELECT id, title FROM v_plans_ready;
+SELECT id, title FROM v_projects_to_review;
+SELECT id, open_issues, title FROM v_projects_to_document;
 ```
 
-(kumiai: `file_bug` with `found_by: "orchestrator"` — `kumiai.md` §1 *Bug*.)
+- **New ready plans** → 4.1 to 4.3.
+- **A project to review** → run the review below (4.5a). When every reviewer has
+  reported and every finding is filed, set `reviewed_at`
+  (`references/board-sql.md` § *Review and documentation*).
+- **A project to document** → spawn `guild:librarian` with the *document* prompt. It writes
+  docs for the project, tags them, and links them to related docs. When it reports, read
+  the docs back, then set `documented_at` and append a line to `CHANGELOG.md` under
+  `## [Unreleased]`: `- {project title} ({PROJ-id}): {one sentence on what now works}`.
 
-Then **go back to 3.1** — re-run the segment query and take the next batch. One line between
-batches and nothing more:
+Reviews and documentation run beside plan execution. They do not hold it up.
 
-```
-REQ-007 — implement.migrations done (developer). Next: test-plan.
-```
+#### 4.5a The review
 
-### 3.5 The gate — `gate-repairs`
+A review is many `guild:reviewer` agents at once, each with **one lens** and **one slice**
+of the project. Small scopes are what let a small model read every line.
 
-When the only ready node is the gate, this is the second and last decision of the
-requirement, and it is yours to put in front of the user.
+**Build the matrix.** Run the matrix query (`references/board-sql.md` § *The review
+matrix*). It lists the project's requirements in order, each with the files its done plans
+changed. Group them into **slices**: one requirement per slice, and at most **four
+slices**. With more than four requirements, put neighbours in the same slice so the
+slices are about the same size. Then the matrix is:
 
-**1. Gather what is being judged** — everything collected during the run:
+| Lens | One reviewer per |
+|---|---|
+| `requirements`, `business-logic`, `edge-cases`, `security` | slice |
+| `architecture`, `audit` | project |
+
+So 1 requirement means 6 reviewers, and 4 or more means 18. A slice's `FILES` is the
+union of its requirements' files. A whole-project row gets every file.
+
+**Spawn** every row, however small the project — never review it yourself instead — with the *review* prompt (`references/dispatch-prompts.md`), in one
+message, in the background. One exception: in a `shared` project, hold the `audit`
+reviewer until no plan is running, because it runs the test suite and a half-edited
+file from another plan would fail it.
+
+**Collect.** Each reviewer ends with `DONE —` or `FAILED —` and a `findings` block of
+one JSON object per line. A `FAILED` reviewer, or one that ended without a block, is
+spawned again once. A second failure leaves the project unreviewed: do not set
+`reviewed_at`, name the missing lens and slice in the wrap-up, and do not try it again
+this run.
+
+**Merge.** When every reviewer has reported, merge before filing anything:
+
+1. **Same problem, two lenses.** Same `file`, lines within 5 of each other (or both
+   `null`), and titles that describe the same fault → one finding. Keep the highest
+   severity, join the bodies, and set `found_by` to every lens, such as
+   `reviewer:edge-cases+security`.
+2. **Already filed.** Drop a finding that matches an open issue of the project (same file
+   and fault) or one a reviewer listed under "Already filed".
+3. **Out of bounds.** A `requirement` outside the project, or a `plan` outside that
+   requirement, is set to `null`, not dropped.
+
+**File** every merged finding as a `review` issue (board-sql § *Filing the merged
+findings*), all in one script. Then set `reviewed_at`.
+
+In a check-in, show the result in one line per project:
+`PROJ-002 reviewed by 10 reviewers: 1 critical, 3 major, 4 minor (ISSUE-014 to ISSUE-021)`.
+
+### 4.6 When nothing is left
+
+Step 4 ends when nothing is running, nothing is ready, and no review or documentation is
+waiting or running. Then check:
 
 ```sql
-SELECT id, task_id, reviewer, severity, disposition, file, line, summary, detail
-  FROM v_open_findings WHERE requirement_id = 'REQ-NNN';
-SELECT id, severity, status, found_by, title FROM v_open_bugs;
-SELECT id, who, waived, reason, title FROM v_failed_tasks WHERE requirement_id = 'REQ-NNN';
-SELECT prompt, kind FROM gate WHERE node_id = 'REQ-NNN/gate-repairs';
+SELECT id, wait, title FROM v_plans_blocked;
+SELECT COUNT(*) FROM v_open_issues WHERE fix_plan_id IS NULL AND status = 'open';
 ```
 
-(kumiai: `read_view` on the three views with `where: {requirement_id}` — `v_open_bugs` unfiltered
-— and `get gate` for `REQ-NNN/gate-repairs`.)
-
-**2. Present it as one decision.** Use the gate's own prompt — the template wrote it:
-
-```
-REQ-007 — Session-backed authentication: the run is complete.
-
-  4 reviewers, 3 findings:
-    1. [security]        Unsigned callback token accepted            (major)
-    2. [edge-case]       Empty session id is not rejected            (major)
-    3. [architecture]    Auth service reaches into the route layer   (minor)
-  2 bugs filed during the run:
-    4. BUG-004 critical  Preference toggles silently revert after save
-    5. BUG-005 minor     Loading spinner flashes on fast responses
-  1 failed task:
-    6. TASK-013 Migrate legacy preference rows — migration is not idempotent
-
-Findings and bugs from REQ-007 — approve which get repaired.
-```
-
-**If nothing was collected** — no findings, no open bugs, no failed tasks, which is the normal
-outcome when review and tests were skipped as unnecessary or ran clean — **do not present an
-empty menu.** Ask one short question instead, with the gate's own prompt:
-
-```
-REQ-011 — Guild plugin research writing: the run is complete.
-  Nothing was collected — no findings, no bugs, no failed tasks.
-  (Review: skipped, 2 of 4 reviewers; tests: checks only — see the plan's Assurance table.)
-
-Confirm to close out: nothing to repair?
-```
-
-with `AskUserQuestion` options **Confirm — repair nothing** and **Hold**. Record it as the
-approved-with-`none` decision below. The gate stays: a gate is the guild master's decision and is
-never dropped, and `none` is how "approve, repair nothing" is said out loud. What you spare them is
-the menu, not the decision.
-
-**3. Ask with AskUserQuestion, as a MULTI-SELECT** — one option per numbered item ("Repair:
-{item}"). They can approve some, all or none; "Other" covers anything they would rather
-phrase differently.
-
-**4. Record the decision, and create the repairs.** Two writes, always — setting `gate.status`
-does **not** move the node:
-
-```sql
-PRAGMA foreign_keys = ON;
-UPDATE guild_state SET value = 'orchestrator' WHERE key = 'actor';
-
-UPDATE gate SET status = 'approved',
-                decision = CAST(x'<hex-decision>' AS TEXT),
-                decided_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
- WHERE node_id = 'REQ-NNN/gate-repairs' AND status = 'pending'
-   AND EXISTS (SELECT 1 FROM v_ready_nodes r WHERE r.id = 'REQ-NNN/gate-repairs')
-RETURNING node_id, status;
-
-UPDATE graph_node SET status = 'done'
- WHERE id = 'REQ-NNN/gate-repairs'
-   AND (SELECT g.status FROM gate g WHERE g.node_id = graph_node.id) = 'approved'
-RETURNING id, status;
-```
-
-**On `kumiai` this is one call** — `read_view v_ready_nodes where {id: "REQ-NNN/gate-repairs"}`
-must return the row first, then `resolve_gate {node, status: "approved", decision}`, which
-moves the gate and the node in one transaction — `done` on approve, `skipped` on reject
-(`kumiai.md` §4 *Resolve a gate*).
-
-- **The `v_ready_nodes` guard is not decoration.** Approving a gate whose predecessors have
-  not finished makes `repair` ready immediately, and repairs would run against findings
-  nobody produced.
-- **`decision` is mandatory on this gate** — it *is* the fan-out. `none` is how you say
-  "approve, repair nothing" out loud. Pass the user's own words through; six weeks later the
-  reasoning is the part anyone wants.
-- **On reject** (the run was wrong, not its findings): `status = 'rejected'` and the node goes
-  to `'skipped'`. Say so and stop. A rejected gate may be decided again; an **approved** one
-  may not — its successors have already been unblocked.
-
-Then create one plain ticket per approved item (`task` + `task_capability`, per
-`queries.md` §1), and link each repair to what it repairs:
-
-```sql
-UPDATE review_finding SET disposition = 'fixing', fix_task_id = 'TASK-021'
- WHERE id = 7 AND disposition = 'open' RETURNING id, disposition;
-UPDATE bug SET status = 'fixing', fix_task_id = 'TASK-022'
- WHERE id = 'BUG-004' AND status = 'open' RETURNING id, status;
-```
-
-(kumiai: `create_task` carries the capabilities in the same call; then
-`update_finding {id: 7, disposition: "fixing", fix_task: "TASK-021"}` and
-`update_bug {key: "BUG-004", status: "fixing", expect_status: "open", fix_task: "TASK-022"}`.)
-
-Go back to **3.1** — the approved gate makes `repair` ready. **There is no automatic
-re-review.** If the user wants another pass later, that is a fresh reviewer ticket.
-
-### 3.6 Requirement completion
-
-When every node is `done` or `skipped`, confirm nothing is still open:
-
-```sql
-SELECT id, status, tasks_total, tasks_done, tasks_open, tasks_blocked, tasks_failed, title
-  FROM v_requirement_progress WHERE id = 'REQ-NNN';
-```
-
-`tasks_open = 0` → `UPDATE requirement SET status = 'done' WHERE id = 'REQ-NNN' AND status <>
-'done' RETURNING id, status;` (kumiai: `update_requirement`, then `update_project` /
-`update_goal` for the roll-up) then roll the direction above it up — a project whose
-requirements are all done is `done`, a goal whose projects are all done is `done` — then append
-a bullet to `CHANGELOG.md` (3.9).
-
-Closing a **sequential** project is what releases the next one in its goal, so re-read
-`v_projects_runnable` after the roll-up: a project that was not runnable a moment ago may be
-now, and that is the next thing to dispatch.
-
-**`tasks_open` counts `blocked`, and that is the point.** `failed` was adjudicated at the
-gate; `blocked` is a machine verdict nobody has looked at, and closing a requirement over one
-ships un-attempted work silently. **Nothing in the schema stops you** — this is a
-convention you honor. If a blocked task is holding a requirement open, say so by name; the
-fix is recruiting (3.8), not a status edit.
-
-List any `failed` tasks in the completion summary — they were judged at `gate-repairs`, so
-they report rather than block.
-
-Then summarize the requirement and ask: continue with the next one, or wrap up?
-
-### 3.7 A requirement with no graph — the cursor fallback
-
-A board that predates the graph falls back to the cursor (`v_next_task`, `v_batch`). Full
-procedure: `references/edge-cases.md` § cursor fallback.
-
-### 3.8 No eligible agent — block it, loudly
-
-When the match in 3.3 comes back empty, that is a roster gap and it must be written down —
-nothing else can make it visible. Full procedure, including the exact writes and the message
-to the user: `references/edge-cases.md` § no eligible agent.
-
-### 3.9 CHANGELOG maintenance
-
-On requirement completion (3.6), append a bullet under `## [Unreleased]` in the repo-root
-`CHANGELOG.md`. Full format and the waived-task variant: `references/edge-cases.md` §
-CHANGELOG maintenance.
+- **New issues without a fix plan** (from reviews, failures or discoveries) → go back to
+  **Step 3**, which writes fix plans, then Step 2 approves them. In a check-in, first ask
+  with `AskUserQuestion` whether to continue with the fixes now or stop here.
+- **Blocked plans and nothing else** → they wait on something outside this run: a rejected
+  plan, a plan with no agent, or a dependency cycle. Name each with its `wait` and stop.
+- **Otherwise** → Step 5.
 
 ---
 
-## Step 4: Session wrap-up
-
-When the cycle ends (the user stops, or nothing is actionable):
-
-```
-Session Summary
-===============
-Nodes run: {N}     Tickets completed: {N}     Bugs filed: {N}
-
-Requirements:
-  REQ-007: Session-backed authentication — in-progress, at gate-repairs
-  REQ-008: Preferences page — in-progress (implement.ui running)
-
-Next check-in, I'll continue with:
-  REQ-007 — the repairs gate is ready for your decision
-```
-
-**The summary does not end without these three, when any is non-empty:**
-
-- **Gates awaiting you** — `SELECT * FROM v_gates_pending`. The only thing on the board that
-  cannot move without the user; it belongs at the top of the wrap-up, not the bottom.
-- **Blocked work** — `v_blocked_tasks`. It never resolves on its own, and a `status-blocked`
-  row whose `who` reads `needs:…` is a roster gap: that is an agent file waiting to be
-  written.
-- **Nodes left `failed` or `running`** — a `running` node with no live agent is a crash site
-  and it holds everything behind it.
-
-Then, and only then, stamp the check-in:
+## Step 5 — Goals that may be complete
 
 ```sql
-UPDATE guild_state SET value = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+SELECT id, success_criteria, title FROM v_goals_complete;
+```
+
+Every project under these goals is done and documented. Only a person can say whether the
+goal is met.
+
+**Check-in only:** for each, show the goal, its `success_criteria` and its documented
+projects, then `AskUserQuestion`:
+
+- **Close the goal** → `UPDATE goal SET status = 'done' WHERE id = ? AND status <> 'done'
+  RETURNING id, status`.
+- **More is needed** → ask what is missing, then spawn `guild:project-manager` with the
+  *projects* prompt and the user's answer. Go back to Step 3.
+- **Not now** → leave it open.
+
+A shift never closes a goal. It lists them in its report.
+
+---
+
+## Step 6 — Wrap up
+
+```
+Session summary
+===============
+Plans approved: {n}   denied: {n}   completed: {n}   failed: {n}
+Projects reviewed: {n}   documented: {n}   Issues filed: {n}
+
+Goals
+  GOAL-001 Build a CMS — 2 of 4 projects done
+    PROJ-002 User registration — in progress, 3 of 5 requirements done
+
+Waiting on you
+  ...
+```
+
+**Never end without these, when any is non-empty, at the top of the summary:**
+
+- plans waiting for approval (`v_plans_pending_approval`)
+- goals to sign off (`v_goals_complete`)
+- stuck plans, with their issue (`v_plans_stuck`)
+- plans nobody can run, with the missing capability (from 4.2). The fix is an agent file
+  that declares it.
+- blocked plans, with what they wait on (`v_plans_blocked`)
+
+Then stamp the check-in, **last**, because it is the cutoff for the next "what moved"
+report:
+
+```sql
+UPDATE guild_state SET value = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
  WHERE key = 'last-checkin' RETURNING key, value;
 ```
 
-(kumiai: `set_state {key: "last-checkin", value: "<now, ISO-8601 UTC>"}`.)
+## Key rules — the checklist
 
----
-
-## Step 5: Verify against expectations
-
-Before you hand the session back, run `guild:validate check-in` — the global invariants plus
-§7 of `docs/expectations.md`, which asserts the four ways an orchestrator goes wrong:
-dispatching by a hardcoded name, letting somebody else move a status, building past a gate,
-and re-deriving a rule instead of reading the view. **Report every failure with its rows.**
-Your own account of what you wrote is not evidence; the board is. On `kumiai`,
-`guild:validate` runs it server-side as `check_invariants {process: "check-in"}`.
-
-## Key Rules — at a glance
-
-Each is argued in full where it first applies above; this is the checklist, not the argument.
-
-1. The graph is the chain, and you do not know it — never invent an order, widen a batch,
-   merge two, or dispatch a node the graph did not offer (§3.1–3.2).
-2. You own every status transition, with no exceptions — `task`, `graph_node`, `gate`, and
-   also `bug`, `plan`, `doc`, `inspection` and a finding's `disposition`. Agents report the
-   outcome; you move it (3.4). Agents' board writes are content rows only — `work_log`,
-   `review_finding`, new `bug` and `doc` rows, knowledge edges (Core model).
-3. Record BOTH halves of every 3.4 row — ticket and node, always.
-4. Two gates, and only one is yours: `gate-plan` (new-requirement's), `gate-repairs` (§3.5).
-5. Problems are collected, not escalated — judged together at `gate-repairs` (§3.5).
-6. The graph orders; `v_open_bounties` only names who could take a ticket, not whether it may
-   run yet.
-7. There is no reviewer fan-out to perform — the `review` node is four nodes, the member is
-   the suffix of the node id (§3.3).
-8. Read the view, do not re-derive the rule — the one exception is the agent match, whose
-   single definition is §3.3.
-9. Serial members are never concurrent; a batch that would hold two is stop-and-report, not
-   something you quietly serialize (§3.2).
-10. Subagents can't ask the user — relay through `NEEDS INPUT:`, `AskUserQuestion`, then
-    `SendMessage` the answer back (§3.3).
-11. A ticket names a capability; YOU name the member — honor a pin, else run §3.3 and dispatch
-    rank 1, never invent or widen the superset test.
-12. `blocked` means "no subagent available can take this bounty" and nothing else, written by
-    you the moment the match fails (§3.8).
-13. You never write an `agents/*.md` file — that happens only in `guild:new-requirement`, on
-    the user's explicit answer.
-14. Guard every mutation and read the `RETURNING` — one logical change per invocation, and
-    zero rows back is information you act on.
+1. Approvals first, then fill, then approve again, then execute. Never execute a plan the
+   user has not approved (check-in) or the shift rules did not approve (shift).
+2. One agent per missing item, all spawned in one message. Repeat the fill until nothing
+   is missing.
+3. Dispatch every ready plan that does not conflict on files or serial agents. Record each
+   result as it arrives, then look again.
+4. A failure is an `execution` issue and the plan stays `in-progress`. Never retry it
+   silently and never stop the run for it.
+5. A finished project is reviewed by many `guild:reviewer` agents, one lens and one slice
+   each, then documented by the librarian. Reviewers only report. You merge and file their
+   findings as issues. Nobody fixes anything during a review.
+6. Issues become fix plans in Step 3, and fix plans need approval like any plan.
+7. You move every status. Agents write content and report.
+8. A goal closes only on a person's word.

@@ -33,7 +33,10 @@ from pathlib import Path
 # Nearest scope first. A name found earlier is not overridden by a later one.
 def scan_roots():
     roots = []
-    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    # The variable is set in hooks, but not always in a Bash call. This script lives at
+    # <plugin>/skills/check-in/scripts/, so its own path is the fallback.
+    plugin_root = (os.environ.get("CLAUDE_PLUGIN_ROOT")
+                   or str(Path(__file__).resolve().parents[3]))
     cwd = Path.cwd()
     home = Path.home()
 
@@ -45,6 +48,7 @@ def scan_roots():
     # Other installed plugins. Both the installed cache and the marketplace checkouts,
     # because which of the two is live depends on how the plugin was installed.
     for base in (home / ".claude" / "plugins" / "cache",
+                 home / ".claude" / "plugins" / "synced",
                  home / ".claude" / "plugins" / "marketplaces"):
         if base.is_dir():
             for d in sorted(base.rglob("agents")):
