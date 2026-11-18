@@ -453,7 +453,7 @@ Consider regular reviews:
 
 ## Summary
 
-Comprehensive review provides five perspectives on code quality. To interpret effectively:
+Comprehensive review looks through six lenses. To interpret effectively:
 
 1. **Check overall status** - Pass/Needs Attention/Critical
 2. **Identify cross-cutting patterns** - Issues appearing in multiple reports
