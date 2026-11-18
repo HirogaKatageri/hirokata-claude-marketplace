@@ -1,0 +1,70 @@
+schema_version: "1.1"
+name: review-planted-bugs
+description: >
+  A small orders module on a feature branch with seven planted problems:
+  SQL injection (security), division by zero on an empty list (edge cases), a discount
+  range the code never enforces (business logic), and a CSV export requirement that was
+  never built (requirements). A good review finds all four and fixes none.
+tags: [behaviour, review]
+plugins: ["../../.."]
+runs: 2
+context:
+  scaffold_script: scaffold.sh
+execution:
+  max_turns: 60
+  timeout_seconds: 1500
+  allowed_tools: [Skill, Read, Glob, Grep, Agent, Bash]
+  prompt: >
+    I've finished the orders feature on this branch. The requirements are in
+    docs/requirements.md. Review my changes against main before I open a PR.
+graders:
+  - name: fires-comprehensive-review
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(guild:)?comprehensive-review"'
+  - name: spawns-lens-reviewers
+    type: tool_used
+    tool: Agent
+    input_match: 'guild:reviewer'
+    min: 4
+    arm: with-only
+  - name: finds-sql-injection
+    type: regex
+    pattern: 'injection'
+    flags: i
+  - name: finds-missing-csv
+    type: regex
+    pattern: 'csv'
+    flags: i
+  - name: core-four-found
+    type: llm
+    weight: 2
+    criteria: |
+      The final response is a code review of src/orders.js against docs/requirements.md.
+      PASS only if it identifies ALL FOUR of these problems, each in its own words:
+      1. findOrders builds SQL by string concatenation: SQL injection.
+      2. averageOrderValue divides by orders.length, so an empty list gives NaN, while
+         requirement R2 says it must return 0.
+      3. applyDiscount never enforces the 0 to 50 percent range that R3 requires.
+      4. R4, exporting orders as CSV, is not implemented at all.
+      FAIL if any of the four is missing, or if the response says it changed or fixed
+      the code.
+  - name: subtle-three-found
+    type: llm
+    weight: 2
+    criteria: |
+      The final response is a code review of src/orders.js against docs/requirements.md.
+      PASS only if it identifies ALL THREE of these problems, each in its own words:
+      1. getOrder never checks ownership: a non-admin user gets any order, even one that
+         belongs to another customer (R5 requires null). An authorization or access
+         control flaw.
+      2. findOrders has no ORDER BY, so orders are not returned newest first (R1).
+      3. applyDiscount does not round the new amount to 2 decimal places (R3).
+      FAIL if any of the three is missing.
+  - name: severity-ranked
+    type: llm
+    criteria: |
+      PASS if the response marks the SQL injection AND the missing ownership check in
+      getOrder as among the most severe problems (critical, blocker, must fix, or
+      equivalent) and gives a clear verdict on PR readiness (for example "not ready" or
+      "blocked"). FAIL otherwise.

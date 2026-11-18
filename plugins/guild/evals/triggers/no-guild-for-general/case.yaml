@@ -1,0 +1,17 @@
+schema_version: "1.1"
+name: no-guild-for-general
+tags: [trigger, negative]
+plugins: ["../../.."]
+runs: 3
+execution:
+  max_turns: 4
+  allowed_tools: [Skill, Read, Glob, Grep]
+  prompt: "In one paragraph, explain what a SQL view is."
+graders:
+  - name: no-guild-skill
+    type: tool_used
+    tool: Skill
+    input_match: "guild:"
+    min: 0
+    max: 0
+    arm: both

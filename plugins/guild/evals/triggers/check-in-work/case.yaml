@@ -1,0 +1,15 @@
+schema_version: "1.1"
+name: check-in-work
+tags: [trigger]
+plugins: ["../../.."]
+runs: 3
+execution:
+  max_turns: 4
+  allowed_tools: [Skill, Read, Glob, Grep]
+  prompt: "let's get to work on the board"
+graders:
+  - name: fires-check-in
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(guild:)?check-in"'
+
