@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed (BREAKING)
+- **Guild Plugin v10.0.0 — the board is rebuilt around plans (schema v10).** Work is a goal, its
+  projects, their requirements and the plans that build them. Tasks and the execution graph (graph
+  nodes, edges and gates) are removed. Each plan names the capabilities it needs, and the roster
+  picks the agent. A plan runs only once approved: in a check-in the user approves every plan
+  (approve, deny or review); in a shift the orchestrator approves on its own, works on a
+  `guild/shift-*` branch and stops when it needs the user. A finished project is reviewed, its
+  findings filed as issues that get fix plans, and then documented. The five reviewer agents become
+  one `guild:reviewer` (Haiku) with a new `guild:review-lenses` skill, spawned once per lens and
+  slice. `guild:new-goal` is added; `guild:new-requirement` and `test-planner` are removed. **No
+  migration:** a v9 board stays readable, but v10 starts a fresh `.guild/guild.db`. The marketplace
+  version now matches guild's. Detail in [`plugins/guild/CHANGELOG.md`](plugins/guild/CHANGELOG.md).
 - **Guild Plugin v9.0.0 — the roster gets neutral names.** `product-owner` is now `project-manager`
   and `architect` is now `strategist`; the roles are unchanged, but "product owner" and "architect"
   are software job titles, and the guild is meant to assemble a team for any purpose, not a coding
@@ -33,9 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matched by capability. A hand-written ticket requiring `architecture` is the one board that could
   be affected; `SELECT task_id, capability FROM task_capability WHERE capability = 'architecture'`
   finds it.
-- Versions: guild **8.1.0 → 9.5.0**; marketplace **7.1.1 → 8.5.0**. Full detail, including the
+- Versions: guild **8.1.0 → 10.0.0**; marketplace **7.1.1 → 10.0.0** (the marketplace now shares guild's version). Full detail, including the
   8.1.1 and 8.1.2 releases folded into this jump, the 9.1.1 markdown-mirror removal, the 9.2.0
-  interview/skill changes, the 9.3.0 assurance assessment, the 9.4.0 Kumiai backend and the 9.5.0 Svelte refresh below, is in [`plugins/guild/CHANGELOG.md`](plugins/guild/CHANGELOG.md).
+  interview/skill changes, the 9.3.0 assurance assessment, the 9.4.0 Kumiai backend, the 9.5.0 Svelte refresh and the 10.0.0 plan board below, is in [`plugins/guild/CHANGELOG.md`](plugins/guild/CHANGELOG.md).
 
 ### Changed
 - **Guild Plugin v9.5.0 — the Svelte developer targets SvelteKit 3 and Svelte 5.57.** SvelteKit 3
