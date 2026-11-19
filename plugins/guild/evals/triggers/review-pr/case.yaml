@@ -1,0 +1,15 @@
+schema_version: "1.1"
+name: review-pr
+tags: [trigger]
+plugins: ["../../.."]
+runs: 3
+execution:
+  max_turns: 4
+  allowed_tools: [Skill, Read, Glob, Grep]
+  prompt: "review my changes before I open a PR"
+graders:
+  - name: fires-comprehensive-review
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(guild:)?comprehensive-review"'
+

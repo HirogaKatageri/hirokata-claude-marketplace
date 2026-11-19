@@ -1,158 +1,109 @@
 ---
 name: comprehensive-review
-description: Use this skill when the user wants to review code changes, verify implementation quality, or check readiness before a PR or deployment. Trigger on phrases like "review my changes", "run comprehensive review", "check all my code", "am I ready for PR", "before I create a PR", "before I merge", "code audit", "quality check", "verify my implementation", "is my feature complete", "run all reviewers", "check if my implementation is complete", "deep code review", "deep review", or any multi-dimensional code analysis request. Also use proactively when the user says they've finished a phase, completed a feature, or are wrapping up work — even if they don't explicitly ask for a "review". Covers requirements compliance, test coverage, edge cases, architecture alignment, and security.
-version: 0.4.0
+description: Use this skill when the user wants to review code changes, verify implementation quality, or check readiness before a PR or deployment. Trigger on phrases like "review my changes", "run comprehensive review", "check all my code", "am I ready for PR", "before I create a PR", "before I merge", "code audit", "quality check", "verify my implementation", "is my feature complete", "run all reviewers", "check if my implementation is complete", "deep code review", "deep review", or any multi-dimensional code analysis request. Also use proactively when the user says they've finished a phase, completed a feature, or are wrapping up work — even if they don't explicitly ask for a "review". Covers requirements, business logic and tests, edge cases, security, architecture, and an audit that runs the project's checks.
+version: 1.0.0
 user-invocable: true
 ---
 
 # Comprehensive Review
 
-Orchestrates five specialized review agents in parallel to provide a complete, multi-dimensional analysis of recent code changes:
+Reviews a set of changes with many `guild:reviewer` agents at once, each with one lens
+and one slice of the changes, then merges their findings into one report. It reads and
+reports. It never fixes code and never writes to the guild board.
 
-1. **Requirements Compliance** — Verifies all requirements are implemented
-2. **Test Coverage** — Ensures business logic is testable and tested
-3. **Edge Case Handling** — Identifies unhandled edge cases and boundary conditions
-4. **Architectural Alignment** — Checks compliance with clean architecture principles
-5. **Security** — Identifies vulnerabilities and risks (OWASP Top 10)
+A finished guild project is reviewed by check-in itself (`guild:check-in` Step 4.5a),
+which files the findings as issues. This skill is the on-demand version for "am I ready?"
 
-## Review Workflow
+## Step 1 — The scope
 
-### Step 1: Identify Review Scope
-
-1. **Find requirements documents** — check the guild board first. If `.guild/config.yaml` exists,
-   the board is a database, not a directory tree; read it with SQL (load `guild:warehouse` for
-   the rules, notably that a body comes back byte-exact only when it is the **one** column you
-   select):
+1. **The changes.** Use what the user named (a branch, a commit range, files). Otherwise
+   take the current branch against its base: `git diff --stat main...HEAD` plus
+   uncommitted changes. Nothing changed → ask for a range or files.
+2. **The requirements.** When `.guild/config.yaml` exists, read the board (read only):
 
    ```bash
    export PATH="$HOME/.turso:$PATH"
-   printf "SELECT id, status, title FROM requirement ORDER BY id;\n" | tursodb -q -m list .guild/guild.db
-   printf "SELECT body FROM requirement WHERE id = 'REQ-007';\n" | tursodb -q -m list .guild/guild.db
-   printf "SELECT body FROM plan WHERE requirement_id = 'REQ-007';\n" | tursodb -q -m list .guild/guild.db
+   printf "SELECT json_object('id',id,'project',project_id,'status',status,'title',title)
+      FROM requirement ORDER BY created_at, id;\n" | tursodb -q -m list .guild/guild.db
    ```
 
-   If `.guild/config.yaml` says `backend: kumiai`, the board is a Kumiai workspace instead:
-   `list {type: "requirement"}`, `get {type: "requirement", key: "REQ-007"}` and `list
-   {type: "plan", where: {requirement_id: "REQ-007"}}` (`guild:warehouse` →
-   `references/kumiai.md`). Tell the reviewers you dispatch which backend it is.
+   Otherwise look for plan or requirement files in `docs/`, `planning/` or
+   `requirements/`. Pick the ones the changes are for and confirm with the user when it
+   is unclear. None at all → ask, or skip the `requirements` lens if the user says so.
 
-   Keep `-m list` even for a single column: the default `pretty` mode draws a box and
-   **truncates long values with an ellipsis**, which would silently hand you a clipped
-   requirement to review against.
+## Step 2 — The matrix
 
-   Otherwise fall back to `requirements/`, `docs/`, `planning/`, or phase plan files. If none
-   found, ask the user.
-2. **Identify recent changes** — use `git log` and `git diff` to understand scope
-3. **Confirm scope** — if unclear which requirements or commits to include, ask
+Split the changed files into **slices**: group them by feature or top folder, at most
+**four slices**, of about the same size. Fewer than about 15 changed files is one slice.
 
-> Board-driven review of a guild requirement is normally handled by the check-in pipeline's
-> `reviewer` gate; this skill is the read-only, on-demand surface for ad-hoc "am I ready?" checks.
+| Lens | One reviewer per |
+|---|---|
+| `requirements`, `business-logic`, `edge-cases`, `security` | slice |
+| `architecture`, `audit` | all the changes |
 
-### Step 2: Launch All Five Agents in Parallel
+## Step 3 — Spawn
 
-Launch all agents in a **single message** using multiple Agent tool calls. Include specific file paths and context in each prompt so agents don't waste time on discovery.
+**Always spawn the reviewers, however small the change.** Do not review the code
+yourself instead: a single reader misses what six narrow ones catch, and the audit lens
+is the only one that runs the checks. Your job is the scope, the merge and the report.
 
-**product-reviewer:**
-> "Review recent changes against [requirements-file]. Map each requirement to its implementation. Flag anything missing or partially implemented. [State the project's architecture conventions only if a plan or phase document actually defines them.]"
+All reviewers in one message. Each prompt:
 
-**reviewer-business-logic:**
-> "Review recent changes for business logic testability and unit test coverage. Focus on services, use cases, and domain logic. Flag untestable patterns (hard-coded dependencies, global state, non-determinism) and missing unit tests."
-
-**reviewer-edge-case:**
-> "Review recent changes for unhandled edge cases: null/undefined access, empty collections, boundary values, error scenarios (network timeout, DB failure, API errors), date/time issues, and concurrency problems."
-
-**reviewer-architecture:**
-> "Review recent changes for architecture compliance. Check dependency direction (inner layers must not depend on outer), layer separation (business logic out of UI), and consistency with the project's established structure. [Cite the plan's architectural decisions or the project's documented conventions — do not assume a phase methodology unless a plan document defines one.]"
-
-**reviewer-security:**
-> "Review recent changes for security vulnerabilities: injection flaws (SQL, command, template), authentication/authorization issues, sensitive data exposure, hardcoded secrets, weak cryptography (MD5/SHA1/DES), XSS, CSRF, and missing input validation. Reference OWASP Top 10."
-
-### Step 3: Collect Agent Reports
-
-Wait for all five agents. Capture full reports and note critical issues.
-
-### Step 4: Present Consolidated Report
-
-Use the following structure. Status icons reflect actual findings — do not default to ✅ if there are issues.
-
-```markdown
-# Comprehensive Review Report
-
-## Executive Summary
-
-**Review Scope:**
-- Requirements: [which documents]
-- Changes: [commit range or files]
-- Files Reviewed: [count]
-
-**Overall Status:** [Pass / Pass with Warnings / Needs Attention / Critical Issues]
-
-**Critical Issues:** [count] | **Warnings:** [count] | **Recommendations:** [count]
-
-## Review Dimensions
-
-| Dimension | Status | Summary |
-|---|---|---|
-| Requirements Compliance | [✅/⚠️/❌] | [X]% implemented, [N] missing |
-| Test Coverage | [✅/⚠️/❌] | [X]% coverage, [N] untestable |
-| Edge Case Handling | [✅/⚠️/❌] | [N] critical, [N] warning |
-| Architecture Alignment | [✅/⚠️/❌] | [N] violations, [N] warnings |
-| Security | [✅/⚠️/❌] | [N] critical, [N] high |
-
-**Status icons:** ✅ Good | ⚠️ Needs Attention | ❌ Critical Issues
-
-## Priority Actions
-
-### Must Fix Immediately
-1. [Critical issue — source agent, file:line]
-
-### Should Fix Soon
-1. [Important issue]
-
-### Consider for Future
-1. [Recommendation]
-
----
-
-## Detailed Reports
-
-### 1. Requirements Compliance
-[Full product-reviewer report]
-
-### 2. Test Coverage
-[Full reviewer-business-logic report]
-
-### 3. Edge Case Analysis
-[Full reviewer-edge-case report]
-
-### 4. Architecture Review
-[Full reviewer-architecture report]
-
-### 5. Security Review
-[Full reviewer-security report]
-
----
-
-## Next Steps
-[Prioritized action list based on combined findings]
+```
+You are a reviewer in AD-HOC mode. Do not write to any board.
+LENS:  {lens}
+SCOPE: changes: {range}
+FILES: {the slice's files, or every changed file}
+REQUIREMENTS: {REQ-ids on the guild board, or file paths, or "none"}
+Follow guild:review-lenses with the lens above. Report, do not fix. End with DONE or
+FAILED and the findings block.
 ```
 
-## Handling Special Cases
+A reviewer that ends `FAILED`, or without a findings block, is spawned again once. A
+second failure is named in the report as a lens not reviewed.
 
-**No requirements found:**
-Ask the user to provide a requirements file path, master plan, or confirm whether to skip the requirements review.
+## Step 4 — Merge
 
-**No recent changes detected:**
-Ask the user for a commit range (e.g., `main..feature-branch`) or specific files to review.
+Same problem from two lenses (same file, lines within 5, the same fault) → one finding
+with the highest severity and both lenses named. Then sort by severity.
 
-**An agent fails:**
-Note the failure, continue with the remaining agents, and present a partial report. Suggest running the failed review separately.
+## Step 5 — Report
 
-## Reference Files
+```markdown
+# Comprehensive Review
 
-- **`references/agent-capabilities.md`** — Read this when you need to understand what a specific agent analyzes or how to interpret its metrics (e.g., what "critical" vs "warning" means per dimension).
-- **`references/review-interpretation.md`** — Read this when consolidating findings: contains decision matrices for go/no-go decisions, cross-cutting patterns (issues appearing in multiple reports), and how to prioritize fixes across dimensions.
+**Scope:** {range}, {n} files, {n} reviewers ({lenses} × {slices})
+**Status:** {Ready | Ready with warnings | Needs work | Blocked}
+**Findings:** {n} critical, {n} major, {n} minor, {n} nit
 
-## Limitations
+| Lens | Result |
+|---|---|
+| Requirements | {n of m met, or "skipped: no requirements"} |
+| Business logic | {n findings} |
+| Edge cases | {n findings} |
+| Security | {n findings} |
+| Architecture | {n findings} |
+| Audit | {the commands run and their result, such as "pnpm test: 48 passed"} |
 
-This skill identifies issues but cannot fix them, modify code, or replace human judgment. Use it as part of your quality process, not as a substitute for it.
+## Fix before merging
+1. **{title}** ({severity}, {lenses}) — `{file}:{line}`
+   {body}
+
+## Fix soon
+…
+
+## Worth knowing
+…
+
+## Checked and fine
+{each reviewer's "Checked and fine" line, one per lens}
+```
+
+**Status:** any critical, or a failing build or test suite → **Blocked**. Any major →
+**Needs work**. Only minor and nit → **Ready with warnings**. Nothing → **Ready**.
+`references/review-interpretation.md` has more on reading results across lenses.
+
+## Limits
+
+This skill finds problems. It does not fix them, and it does not replace a person's
+judgment on the result.

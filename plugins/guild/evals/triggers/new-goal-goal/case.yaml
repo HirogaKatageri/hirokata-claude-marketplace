@@ -1,0 +1,15 @@
+schema_version: "1.1"
+name: new-goal-goal
+tags: [trigger]
+plugins: ["../../.."]
+runs: 3
+execution:
+  max_turns: 4
+  allowed_tools: [Skill, Read, Glob, Grep]
+  prompt: "I want to build a CMS for my blog. Add it as a goal for the guild."
+graders:
+  - name: fires-new-goal
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(guild:)?new-goal"'
+

@@ -1,0 +1,21 @@
+schema_version: "1.1"
+name: brief-status
+tags: [trigger]
+plugins: ["../../.."]
+runs: 3
+execution:
+  max_turns: 4
+  allowed_tools: [Skill, Read, Glob, Grep]
+  prompt: "where are we on the guild board? just tell me the status, don't start anything"
+graders:
+  - name: fires-brief
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(guild:)?brief"'
+  - name: not-check-in
+    type: tool_used
+    tool: Skill
+    input_match: "check-in"
+    min: 0
+    max: 0
+    arm: both

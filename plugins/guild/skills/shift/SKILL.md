@@ -1,93 +1,83 @@
 ---
 name: shift
 description: >
-  This skill should be used when the user asks to "work a shift", "run unattended",
-  "keep working while I'm away", "guild shift", "take the night shift", "work the
-  board while I'm out", "run autonomously", "keep going without me", "work
-  overnight", "run until you need me", or any request for the guild to keep working
-  with nobody watching. Runs the unattended loop: claim bounties, run segments,
-  commit per completed task, retry once, record every failure — and STOP at the next
-  gate, because a gate is the one decision no subagent can make.
-version: 5.1.0
+  This skill should be used when the user asks to "work a shift", "start a shift",
+  "run unattended", "keep working while I'm away", "guild shift", "take the night
+  shift", "work the board while I'm out", "run autonomously", "keep going without me",
+  "work overnight", "run until you need me", or any request for the guild to keep
+  working with nobody watching. Runs the check-in flow with no user: approves its own
+  plans, writes missing projects, requirements and plans without interviews, executes
+  ready plans in parallel, reviews and documents finished projects, commits per
+  completed plan, and stops when the budget runs out or only the user can move the
+  board forward.
+version: 6.0.0
 user-invocable: true
-allowed-tools: Bash(tursodb *), Bash(git *), mcp__kumiai__*
+allowed-tools: Bash(tursodb *), Bash(git *), Bash(python3 *)
 ---
 
-# Guild Shift — working the board while you are away
+# Guild Shift — the check-in flow with nobody watching
 
-**Run until the next gate, then stop and notify.**
+**A shift is `guild:check-in` with the user taken out.** It runs the same loop: approvals,
+fill, execute, review, document. Read `guild:check-in` and follow it exactly, including its
+two references, `dispatch-prompts.md` and `board-sql.md`. This page only says **what changes
+when nobody is there.**
 
-That one sentence is the whole design. A requirement's work is cut into *segments* by its two
-gates, and a segment is by definition everything that can run without asking anyone anything.
-So the segment boundary and the stop boundary are the same line, and an unattended shift needs
-no separate notion of "how far may it go" — it goes to the next gate. Then it stops, records
-why, and waits.
+**Load `guild:warehouse` before the first step.** At 3am nobody notices a swallowed error,
+so read every `RETURNING` and every error line.
 
-**Load `guild:warehouse` before the first turn.** Every query on this page is raw SQL against
-`.guild/guild.db`, and the six rules in that skill — hex transport, `PRAGMA foreign_keys`, never
-parsing `-m list` positionally, reading views instead of re-deriving them, `RETURNING` on every
-mutation, errors arriving on stdout — apply to every one of them. At 3am there is nobody to
-notice a swallowed error.
+**Backend:** local only, as in check-in. On `backend: kumiai`, stop and say the Kumiai
+backend has not moved to schema 10 yet.
 
-**Backend.** `backend:` in `.guild/config.yaml` — absent means `local`. Every SQL block here is
-the local path. On `kumiai`, each has a tool-call equivalent (`guild:warehouse` →
-`references/kumiai.md`), named under the block; pass `workspace` from the config and
-`actor: "orchestrator"`. Several shift reads are "since the shift started": that is `where: {ts:
-{op: ">=", value: <the started ts>}}`. **Page every count to the end** (`offset: next_offset`
-until it is `null`) — at 3am a count taken from the first page is as dangerous as a swallowed
-error. The git half of this skill is identical in both backends.
+## What changes without the user
 
-This skill is `guild:check-in` with the human taken out of the middle. **The dispatch protocol is
-unchanged and is not restated here** — how a batch is run, how an agent is spawned, and how a
-result is recorded all live in `guild:check-in`, and you follow it exactly. What a shift adds is
-a budget, a failure policy that never stops to ask, a commit per completed task, and a hard stop
-at the gate.
+| Check-in step | In a shift |
+|---|---|
+| 1.1 an old board | Stop and report it. Never archive a board on your own. |
+| 1.5 route | No question. Run the flow. An empty board (no open goal) ends the shift as `idle`. |
+| 2 approvals | **The orchestrator approves**, under the rules in Step 2 below. It never denies. |
+| 3 fill | The project-manager **does not interview**. Every prompt says `MODE: shift`. |
+| 4.4 `NEEDS INPUT:` | Cannot be answered. The plan is recorded as **failed**, with the questions as the reason. |
+| 4.6 issues waiting | No question. Go straight back to Step 3 for fix plans, within the rules below. |
+| 5 goals complete | Never close a goal. List them in the report. |
+
+Everything else — the roster match, file and serial conflicts, recording results, reviews,
+documentation — is exactly check-in.
 
 ## Before you walk away — what you are authorizing
 
-Say this **out loud, before the first turn**, so the user knows what they are leaving running.
-It is not a formality: they are handing an unsupervised process their working tree.
+Say this to the user **before the shift starts**. They are handing an unsupervised process
+their working tree.
 
 | A shift MAY | A shift MAY NOT |
 |---|---|
-| Claim any open, dependency-satisfied bounty | Approve a gate, or reject one |
-| Run whole segments; compile and run workflows | Proceed past an unresolved gate |
-| Retry a failed task once, with a fresh agent | Create a gate, or drop one |
-| Mark tasks `failed` or `blocked`, and move on | Mark a requirement done past an unresolved gate |
-| File bugs and review findings | Delete anything, or rewrite history |
-| Append to `work_log` and `review_finding` | Push to a remote |
-| Commit per completed task, on `guild/REQ-NNN` | Commit to the default branch |
-| | Change goals, projects or priorities |
-| | Create a guild member |
+| Write projects, requirements and plans for open goals | Create, change or close a goal |
+| Approve plans that meet the Step 2 rules | Deny a plan, or approve one that fails the rules |
+| Run approved plans in parallel | Answer a question on the user's behalf |
+| Write fix plans for issues, within the Step 3 cap | Mark an issue `wontfix` |
+| Review and document finished projects | Archive or delete a board, or any row |
+| Commit each completed plan on a shift branch | Commit to the default branch, push, or rewrite history |
+| File issues | Create an agent file |
 
-**The asymmetry is the point: an unattended guild can do work and record problems, but every
-judgment call waits for the guild master.**
+None of this is enforced by anything. SQL has no identity, git has no allowlist, and
+`guild_state.actor` is a label. Every line is a promise you keep.
 
-> **Not one row of that table is enforced by anything.** SQL has no identity, `git` has no
-> allowlist, and `guild_state.actor` is a label anyone can write. **Every line above is a
-> promise you keep, not a guard that catches you.** Read the table before each shift, and when
-> you catch yourself reasoning toward an exception, that is the moment the table exists for.
+---
 
-## Step 1 — preflight
+## Step 1 — Preflight
 
 ```bash
 export PATH="$HOME/.turso:$PATH"
 [ -f .guild/config.yaml ] || echo "no guild here"
-q() { printf '%s\n' "$1" | tursodb -q -m list .guild/guild.db; }
 ```
 
-`-m list`, always. The default `pretty` mode boxes the output and **truncates long values with
-an ellipsis** — a clipped gate prompt at 3am is a decision presented wrong.
+No guild → say so and stop. `guild:check-in` creates one. Use `-m list` for every query:
+the default box output cuts long values short.
 
-No guild → say so and stop. `/guild:check-in` initializes one.
-
-Then read the board. Three questions, one script, **nothing written**:
+Run check-in Steps 1.1 to 1.3 (board version, roster, recovery), then read three things,
+writing nothing:
 
 ```sql
--- is a decision already waiting?
-SELECT node_id, requirement_id, node_key, kind FROM v_gates_pending;
-
--- is a shift already open? (a crashed shift is a `started` with no `ended`)
+-- is a shift already open? An open shift is a `started` with no `ended`.
 SELECT eo.subject_id, eo.ts, eo.payload FROM event eo
  WHERE eo.subject_type = 'shift' AND eo.verb = 'started'
    AND NOT EXISTS (SELECT 1 FROM event ec
@@ -95,373 +85,214 @@ SELECT eo.subject_id, eo.ts, eo.payload FROM event eo
                       AND ec.subject_id = eo.subject_id)
  ORDER BY eo.ts DESC, eo.id DESC LIMIT 1;
 
--- what would this shift pick up? — THE CANDIDATE QUERY, restated in full at Step 2.1
-SELECT r.id, r.priority FROM requirement r
- WHERE r.status <> 'done'
-   AND EXISTS (SELECT 1 FROM graph_node g WHERE g.requirement_id = r.id)
- ORDER BY r.priority, r.id;
+SELECT fact, value FROM v_brief;
+
+-- is the working tree clean?
 ```
 
-On `kumiai`: `read_view v_gates_pending`; `list {type: "event", where: {subject_type: "shift"},
-order_by: [{col: "ts", dir: "desc"}], limit: 50}` — an open shift is the newest `started` whose
-`subject_id` has no `ended`; and `list {type: "requirement", where: {status: {op: "<>", value:
-"done"}}}`, keeping those with at least one `graph_node` row.
+```bash
+git status --porcelain     # must print nothing
+```
 
-- **A gate is already pending** → there is no shift to work. Present that gate (Step 4) and
-  stop. Starting a shift that ends on its first turn wastes a night.
-- **A shift is already open** → you are resuming it. Its budget is the one recorded in that
-  `started` payload; do not open a second one and do not re-ask the budget.
-- **No candidate has ready work** → say so and stop. An idle shift ends idle rather than
-  inventing work, and **a shift never starts an inspection** — that is `guild:qa`, deliberately
-  manual-trigger-only because a full inspection runs the real product.
+- **A shift is already open** → resume it with the budget in its `started` payload. Do not
+  open a second one and do not ask the budget again.
+- **The working tree is dirty** → stop with reason `operator` and say what is dirty. Never
+  stash, commit or clean the user's work.
+- **No open goal** → stop with reason `idle`. A shift never invents a goal.
 
-**Agree the budget before the first turn.** Defaults are **10 tasks** and **60 minutes**. If the
-user did not name one, use **AskUserQuestion** once — how long, how many tasks — then never ask
-again. The budget is **fixed when the shift opens**; a ceiling you can raise from inside the loop
-is not a ceiling.
-
-Optional scope: pin the shift to one requirement when the user names one. Otherwise let it work
-the board's own order.
+**Agree the budget before the first step.** Defaults: **10 plans** and **60 minutes**. If the
+user did not name one, ask once with `AskUserQuestion`, then never again. The budget is
+fixed when the shift opens. A ceiling you can raise from inside the loop is not a ceiling.
 
 ### Open the shift
 
-Two writes, and they are the **only** hand-written `event` rows in the whole guild. Everything
-else in `event` is trigger-written; these two are append-only, never updated, never deleted, and
-they exist because §8.5 of the design asks that a whole shift be reconstructible from the log.
+The `started` and `ended` events are the only hand-written rows in `event`:
 
 ```sql
 PRAGMA foreign_keys = ON;
 UPDATE guild_state SET value = 'orchestrator' WHERE key = 'actor';
 
 INSERT INTO event (ts, actor, verb, subject_type, subject_id, payload)
-SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'orchestrator', 'started', 'shift',
-       'SHIFT-' || strftime('%Y%m%dT%H%M%SZ','now'),
-       json_object('max_tasks', 10, 'max_minutes', 60, 'requirement', NULL)
+SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), 'orchestrator', 'started', 'shift',
+       'SHIFT-' || strftime('%Y%m%dT%H%M%SZ', 'now'),
+       json_object('max_plans', 10, 'max_minutes', 60,
+                   'branch', 'guild/shift-' || strftime('%Y%m%dT%H%M%SZ', 'now'))
  WHERE NOT EXISTS (SELECT 1 FROM event eo
                     WHERE eo.subject_type = 'shift' AND eo.verb = 'started'
                       AND NOT EXISTS (SELECT 1 FROM event ec
                                        WHERE ec.subject_type = 'shift' AND ec.verb = 'ended'
                                          AND ec.subject_id = eo.subject_id))
 RETURNING subject_id, ts, payload;
-```
 
-`WHERE NOT EXISTS (…)` is what makes a second invocation **resume** rather than open a rival
-shift. Zero rows back means one was already open — read it, and use its budget.
-
-On `kumiai` the guard is the preflight read above, and the write is `record_event {verb:
-"started", subject_type: "shift", subject_id: "SHIFT-20261018T020000Z", payload: {max_tasks: 10,
-max_minutes: 60, requirement: null}}`. These two `record_event` calls are still the only
-hand-written events in the guild.
-
-The mutable scratch state that is not memory goes in `guild_state`, where mutable things belong:
-
-```sql
-INSERT INTO guild_state (key, value) VALUES ('shift:used', '0')
-ON CONFLICT(key) DO UPDATE SET value = excluded.value;
 INSERT INTO guild_state (key, value) VALUES ('shift:stall', '0')
 ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+INSERT INTO guild_state (key, value) VALUES ('shift:events', '0')
+ON CONFLICT(key) DO UPDATE SET value = excluded.value;
 ```
 
-(kumiai: `set_state {key: "shift:used", value: "0"}` and the same for `shift:stall`.)
+Zero rows back from the first insert means a shift was already open. Read it and use its
+budget.
 
-## Step 2 — the loop
+### The branch
 
-One turn is: **pick a requirement → run one batch → record → re-evaluate the stop reason.**
-Never queue a whole segment blind, and never run two batches on one turn.
-
-### 2.1 — which requirement, and is there work in it
-
-This is the candidate query, and §8.1's pick-up order is the `tier` column: **tier 1** is a
-`standard` build graph, which a shift may start cold; **tier 2** is anything else — a
-`maintenance` inspection, a project's own template — which a shift may only *continue*, never
-start. The default for an unknown template is the cautious one on purpose.
-
-```sql
-SELECT r.id, r.priority,
-       COALESCE((SELECT gs.value FROM guild_state gs
-                  WHERE gs.key = 'graph-template:' || r.id), '') AS template,
-       (SELECT COUNT(*) FROM v_ready_nodes n
-         WHERE n.requirement_id = r.id AND n.kind = 'work'
-           AND NOT EXISTS (SELECT 1 FROM task tb WHERE tb.id = n.task_id
-                            AND tb.status IN ('blocked','failed')))          AS ready_work,
-       (SELECT COUNT(*) FROM graph_node g WHERE g.requirement_id = r.id
-          AND g.kind <> 'gate' AND g.status = 'running')                     AS running,
-       (SELECT COUNT(*) FROM graph_node g WHERE g.requirement_id = r.id
-          AND g.kind <> 'gate' AND g.status = 'failed')                      AS failed,
-       CASE WHEN COALESCE((SELECT gs.value FROM guild_state gs
-                            WHERE gs.key = 'graph-template:' || r.id), '') = 'standard'
-            THEN 1 ELSE 2 END                                                AS tier
-  FROM requirement r
- WHERE r.status <> 'done'
-   AND EXISTS (SELECT 1 FROM graph_node g WHERE g.requirement_id = r.id)
-   AND (COALESCE((SELECT gs.value FROM guild_state gs
-                   WHERE gs.key = 'graph-template:' || r.id), '') = 'standard'
-        OR EXISTS (SELECT 1 FROM graph_node g
-                    WHERE g.requirement_id = r.id AND g.status <> 'pending'))
- ORDER BY tier, r.priority, r.id;
-```
-
-On `kumiai` the candidate query is assembled, not written — and every rule in it is still a view
-or a column, read rather than re-derived. Per open requirement with a graph:
-`get_state {key: "graph-template:REQ-NNN"}` (the template, so the tier);
-`read_view v_ready_nodes where {requirement_id, kind: "work"}`, dropping nodes whose bound
-ticket (`get task`) is `blocked` or `failed` (`ready_work`); and `list graph_node where
-{requirement_id}` for `running`, `failed` and "anything not `pending`". Sort by tier, priority, id.
-
-Take the **first row with `ready_work > 0`**. If the user pinned a requirement, add
-`AND r.id = 'REQ-NNN'`. If no row has ready work, go to Step 3 — the shift is over.
-
-**The ticket filter is not an optimization.** A node whose bounty is `blocked` or `failed` is
-ready by the graph's rules and unrunnable in fact — exactly the state the roster-gap rule
-creates. Counting it would make the shift select the same requirement, emit the same directive,
-and spin all night.
-
-### 2.2 — the branch, once per requirement
+One branch per shift, named in the `started` payload. Work in shared projects is committed
+there. A `worktree` project commits on its own worktree's branch.
 
 ```bash
-git rev-parse --is-inside-work-tree                       # a repo at all?
-git status --porcelain                                    # MUST be empty
-git rev-parse --abbrev-ref HEAD
-git switch -c "guild/REQ-NNN" 2>/dev/null || git switch "guild/REQ-NNN"
+default=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+default=${default:-$(git config --get init.defaultBranch || echo main)}
+git switch -c "guild/shift-<ts>" 2>/dev/null || git switch "guild/shift-<ts>"
 ```
 
-**If `git status --porcelain` prints anything the shift did not itself create, stop the shift**
-(reason `operator`) and say what is dirty. `git switch` drags uncommitted changes onto the new
-branch, and a guild master's work-in-progress must never be swept into a shift. Do not stash, do
-not commit it, do not "clean up".
+**Never commit while the default branch is checked out.** The git commands a shift may run
+are exactly: `status`, `rev-parse`, `symbolic-ref`, `config --get`, `branch`, `switch`,
+`worktree add`, `diff`, `log`, `add -- <paths>`, `commit`, `checkout -- <paths>`. Never
+`push`, `fetch`, `pull`, `rebase`, `reset`, `stash`, `tag`, `cherry-pick`, or anything with
+`-f` or `--force`.
 
-**The default branch is off limits.** Resolve it once and never commit while it is checked out:
+---
 
-```bash
-git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||' \
-  || git config --get init.defaultBranch || echo main
-```
+## Step 2 — Approvals, by the orchestrator
 
-**The git allowlist for a shift is exactly this:** `status`, `rev-parse`, `symbolic-ref`,
-`branch`, `switch`, `diff`, `log`, `add -- <paths>`, `commit`, `checkout -- <paths>`.
-Nothing else. Specifically **never** `push`, `fetch`, `pull`, `remote`, `rebase`, `reset`,
-`stash`, `tag`, `cherry-pick`, `filter-branch`, or any `-f`/`--force` anything. No wrapper
-enforces that list — it is enforced by you reading it.
+For each row of `v_plans_pending_approval`, approve it **only when all of these hold**:
 
-### 2.3 — the segment, and the dispatch
+1. `has_capabilities = 1`, and the roster from check-in 1.2 has an agent that can run it
+   (the pin exists, or `roster.py --covers` returns a row).
+2. Every plan it depends on exists and is not `rejected`:
 
-Read what runs, one batch at a time. `v_ready_nodes` is the definition of ready; do not
-re-derive it. (kumiai: `read_view v_ready_nodes where {requirement_id, kind: "work"}`, ordered
-by `id`; the claim and the node move are `set_task_status` (with `expect_status` and the member
-as `claimed_by`) and `set_node_status`, exactly as in `guild:check-in` 3.3 — never with the
-member as `actor`.)
+   ```sql
+   SELECT d.depends_on, p.approval FROM plan_dependency d JOIN plan p ON p.id = d.depends_on
+    WHERE d.plan_id = 'PLAN-014' AND p.approval = 'rejected';      -- must return nothing
+   ```
+3. Its body says what to do and how to check it. An empty or one-line body is not a plan.
 
 ```sql
-SELECT id, node_key, kind, task_id, parallel_group
-  FROM v_ready_nodes
- WHERE requirement_id = 'REQ-NNN' AND kind = 'work'
- ORDER BY id;
+UPDATE plan SET approval = 'approved', approved_by = 'orchestrator',
+                approved_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+ WHERE id = 'PLAN-014' AND approval = 'pending'
+RETURNING id, approval;
 ```
 
-Nodes sharing a `parallel_group` are **one batch** and dispatch together. Take batch 1 and only
-batch 1. Never widen a batch, never merge two, never re-order them.
+A plan that fails a rule stays `pending` for the user, and the report names the rule. Rule 1
+failing is a roster gap. The fix is an agent file, which a shift never writes.
 
-Then follow `guild:check-in`'s dispatch protocol verbatim: resolve the member with the
-pin/capability rule in its §3.3 — the pin wins outright, otherwise `roster.py --covers` the
-ticket's required set and take the first row — move the ticket and the node in that order,
-spawn with the Agent tool, and record both halves when it returns. **Then make the moves the
-report names, exactly as check-in §3.4's second table does** — `BUG-NNN re-verified fixed` closes
-the bug, `doc <new> supersedes <old>` gets its edge and the old doc's move to `superseded` — as
-`orchestrator`. A member moves no status, on any table; you are the only one awake who does.
+---
 
-**Scan the roster once, at the top of the shift**, and reuse it all night. It is a directory of
-markdown files, not a table, and nothing writes to it while you run.
+## Step 3 — Fill, with two limits
+
+Run check-in Step 3 as written, with `MODE: shift` in every prompt. Two limits keep an
+unattended run from feeding itself forever:
+
+- **One fix plan per issue.** Write a fix plan only for an issue that has never had one.
+  An issue whose fix plan was rejected or failed waits for the user.
+- **A failed fix plan is not fixed again.** An `execution` issue filed against a plan of kind
+  `fix` waits for the user. Fixing the fix is how a night disappears.
 
 ```sql
--- claim, then run the node. Two writes; the ticket first.
-UPDATE task SET status = 'in-progress', claimed_by = 'developer',
-                claimed_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
- WHERE id = 'TASK-001' AND status = 'todo' RETURNING id, status, claimed_by;
-
-UPDATE graph_node SET status = 'running', task_id = 'TASK-001'
- WHERE id = 'REQ-001/implement.auth' AND status IN ('pending','ready')
-RETURNING id, status;
+-- the issues a shift may plan fixes for
+SELECT i.id, i.project_id, i.severity, i.title FROM v_open_issues i
+ WHERE i.status = 'open' AND i.fix_plan_id IS NULL
+   AND NOT (i.source = 'execution'
+            AND (SELECT kind FROM plan WHERE id = i.plan_id) = 'fix');
 ```
 
-Two things change because nobody is watching:
+---
 
-- **`NEEDS INPUT:` cannot be answered.** No subagent can reach the user and neither can you at
-  3am. Treat the pause as a **failure of that node** — fail the ticket, fail the node, and log
-  the questions to `work_log` so they are in the record. They surface at `gate-repairs`.
-  **Never answer on the user's behalf.**
-- **A parallel file collision stops the shift.** `guild:check-in` files a bug and keeps going; a
-  shift may not. Two tickets writing the same file means the strategist's disjoint-file assertion
-  in `task.files` was wrong, and reconciling a tree nobody is watching is not safely
-  automatable. File the bug, fail the batch's nodes, **leave the tree exactly as it is**, and end
-  the shift with reason `collision`.
+## Step 4 — Execute, then commit each plan
 
-### 2.4 — git, per completed task
+Run check-in Step 4 as written. Three things change.
 
-One commit per completed task is what makes a bad overnight run bisectable and revertible task
-by task, and the commit log a second record of the shift beside the `event` feed.
+### 4.1 Commit each completed plan
+
+When a plan is recorded `done`, commit **only that plan's files**:
 
 ```bash
-# on done — commit ONLY that task's files (its own `task.files` list)
-git add -- src/lib/auth.ts src/routes/login/+page.server.ts
-git commit -m "$(printf 'feat(auth): session-backed login\n\nGuild-Task: TASK-001\nGuild-Requirement: REQ-001\n')"
+git add -- src/routes/signup/+page.svelte src/lib/server/users.ts
+git commit -m "$(printf 'feat(registration): sign-up form\n\nGuild-Plan: PLAN-014\nGuild-Requirement: REQ-006\nGuild-Project: PROJ-002\n')"
 ```
 
-Stage the ticket's declared `files` by path. Fall back to `git add -A` **only** when no other
-finished task of this requirement is uncommitted — otherwise the diff is mis-attributed to
-whichever task happened to commit first.
+Use Conventional Commits for the subject. Stage the plan's `files` by path. If the agent
+reported touching other files, stage those too, and only when no running plan lists them.
+
+### 4.2 Quarantine a failed plan's edits
+
+When a plan fails, after filing its `execution` issue, move its partial edits aside so the
+next plan starts from a clean tree. Never delete them:
 
 ```bash
-# on failed — quarantine the partial edits, never delete them
-mkdir -p ".guild/backup-revert-TASK-001-$(date -u +%Y%m%dT%H%M%SZ)"
-git diff -- <that task's paths> > ".guild/backup-revert-TASK-001-<ts>/partial.diff"
-git checkout -- <that task's paths>
+q=".guild/quarantine/PLAN-014-$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$q"
+git diff -- <the plan's files> > "$q/partial.diff"
+git checkout -- <the plan's files>
 ```
 
-Untracked files that task created are **moved** into the quarantine directory, not removed.
-Nothing is committed for a failed task, and its partial edits leave the tree before the next
-bounty starts, so one bad task cannot contaminate the next.
+Files the plan created are **moved** into the quarantine folder, not removed. Put the
+folder path in the issue's body.
 
-**It never pushes.** Publishing is a guild-master action, made while looking at the diff.
+**A stuck plan whose fix is done** is set back to `open` once, so it runs again. If it fails
+a second time, leave it for the user.
 
-### 2.5 — the failure policy
+### 4.3 A file collision stops new work
 
-Nothing runs this for you now. These are three rules you apply yourself, each with its own SQL.
+If a finished plan changed a file that a still-running plan lists, two agents wrote one file.
+Stop starting plans, let the running ones finish and record them, file a `discovered` issue
+naming both plans and the file, and end the shift with reason `collision`. **Leave the tree
+exactly as it is.** Reconciling it is the user's job.
 
-**Task fails → retry it once, with a fresh agent instance.** Same ticket, same member — the
-match is deterministic (that is what the `name ASC` tiebreak buys) and re-running it would
-silently route the retry to the roster's second choice.
-The retry marker is a `work_log` line whose text *begins* `Shift retry`, the same
-prefix-as-marker convention `Skipped by user` already uses:
+---
+
+## Step 5 — The stop check, after every recorded result
 
 ```sql
--- has this shift already retried this ticket?
-SELECT COUNT(*) FROM work_log
- WHERE task_id = 'TASK-001' AND entry LIKE 'Shift retry%'
+-- plans started this shift
+SELECT COUNT(DISTINCT subject_id) FROM event
+ WHERE subject_type = 'plan' AND verb = 'moved'
+   AND json_extract(payload, '$.to') = 'in-progress'
    AND ts >= (SELECT ts FROM event WHERE subject_type = 'shift' AND verb = 'started'
                 AND subject_id = 'SHIFT-…');
-
--- no → record the retry and put the node back
-INSERT INTO work_log (task_id, ts, agent, entry)
-SELECT t.id, strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'orchestrator', CAST(x'<hex>' AS TEXT)
-  FROM task t WHERE t.id = 'TASK-001';
-UPDATE task SET status = 'todo', claimed_by = NULL, claimed_at = NULL
- WHERE id = 'TASK-001' AND status = 'failed' RETURNING id, status;
-UPDATE graph_node SET status = 'pending'
- WHERE id = 'REQ-001/implement.auth' AND status = 'failed' RETURNING id, status;
-```
-
-On `kumiai`: the retry count is `list {type: "work_log", where: {task_id: "TASK-001", entry: {op:
-"like", value: "Shift retry%"}, ts: {op: ">=", value: <the started ts>}}}`; then `log_work`,
-`set_task_status {status: "todo", expect_status: "failed", claimed_by: null}` (which clears
-`claimed_at` too) and `set_node_status {status: "pending", expect_status: "failed"}`. The block is
-`set_task_status {status: "blocked", expect_status: "todo"}`, once a `get` has shown no `agent`.
-
-**Still failing → give up on that branch and move on.** The node stays `failed`, its ticket is
-failed with it, and the shift continues with the requirement's other independent work. A `failed`
-node holds only its own successors, which is exactly right: the dead branch stops, the rest runs.
-
-**No eligible agent → block the ticket and move on.** A read never does this; it is a decision,
-and **it is the only thing that makes the gap visible** — no view can derive it, so skipping the
-write means the shift re-picks the same ticket next turn and spins:
-
-```sql
-UPDATE task SET status = 'blocked'
- WHERE id = 'TASK-014' AND status = 'todo'
-   AND COALESCE(agent, '') = ''
-RETURNING id, status;
-```
-
-It surfaces in `v_blocked_tasks` as `status-blocked`, with `who` naming the capabilities, and
-**`blocked` holds the review gate on purpose** — a roster gap should be loud. Do not improvise a
-substitute member; creating an agent is a guild-master decision.
-
-**A retry costs nothing from the task budget**, because the budget counts distinct graph nodes
-this shift moved and a retried node was already counted.
-
-Between turns, show **one line** and nothing more:
-
-```
-REQ-007 batch 2/5 done — implement.migrations (developer) — committed 9f2c1ab
-```
-
-### 2.6 — the stop check, at the end of every turn
-
-```sql
--- tasks spent: DISTINCT graph nodes moved since the shift opened. A node move is the
--- `node-moved` verb (schema.sql trg_node_moved); `moved` is the tickets' and the direction's
--- verb and matches no node, which is how this count once read 0 forever.
-SELECT COUNT(*) AS used FROM (
-  SELECT em.subject_id FROM event em
-   WHERE em.subject_type = 'graph_node' AND em.verb = 'node-moved'
-     AND em.ts >= (SELECT ts FROM event WHERE subject_type = 'shift' AND verb = 'started'
-                     AND subject_id = 'SHIFT-…')
-   GROUP BY em.subject_id);
 
 -- minutes spent
 SELECT CAST((julianday('now') - julianday(
          (SELECT ts FROM event WHERE subject_type = 'shift' AND verb = 'started'
-            AND subject_id = 'SHIFT-…'))) * 1440 AS INTEGER) AS minutes;
+            AND subject_id = 'SHIFT-…'))) * 1440 AS INTEGER);
 
--- is any gate waiting?
-SELECT COUNT(*) FROM v_gates_pending;
-
--- is any DRAFTED PLAN waiting on a person? A plan with no gate node behind it stops the
--- shift for the same reason a gate does — only a human can rule on it — and nothing else
--- in this loop would ever surface it.
-SELECT COUNT(*) FROM v_plans_pending_approval;
+-- events since the shift opened, for the stall check
+SELECT COUNT(*) FROM event
+ WHERE ts >= (SELECT ts FROM event WHERE subject_type = 'shift' AND verb = 'started'
+                AND subject_id = 'SHIFT-…');
 ```
 
-On `kumiai`: `list {type: "event", where: {subject_type: "graph_node", verb: "node-moved", ts:
-{op: ">=", value: <the started ts>}}, limit: 500}`, paged to the end, and count distinct
-`subject_id` — that is `used`. A node move is the `node-moved` verb (`schema.sql`
-`trg_node_moved`); `moved` is the verb of tickets and the direction, and matches no node. Minutes are now minus the `started` `ts`.
-`read_view` on `v_gates_pending` and `v_plans_pending_approval`, counted. The two scratch keys are
-`set_state` every turn.
+**Budget reached** → start no new plan, no new fill and no new review. Let running agents
+finish and record them, then stop.
 
-**The stall detector.** Compare `used` with `guild_state['shift:used']` from the previous turn.
-Same number means nothing moved between them and the loop is spinning; **two in a row ends the
-shift as `infrastructure`.** Two rather than one, because one is reachable honestly — a turn
-whose whole contribution was a retry moves no node. Then write both keys back:
+**Stall check.** When no agent is running, compare the event count with
+`guild_state['shift:events']`. The same number twice in a row means the loop is spinning
+without changing anything: stop with `infrastructure`. Write both keys back every time,
+including when nothing changed.
 
-```sql
-UPDATE guild_state SET value = '<the used count you just read>' WHERE key = 'shift:used';
-UPDATE guild_state SET value = '<0, or the previous stall + 1>' WHERE key = 'shift:stall';
-```
+**Stop on the first of these, in this order:**
 
-Both are integers you computed, so they may be quoted literals. Write them **every turn**,
-including the turns where nothing changed — a stall counter that is only written when it
-increments never decrements.
-
-**Stop on the FIRST of these, in this precedence:**
-
-| # | Reason | Condition |
+| # | Reason | When |
 |---|---|---|
-| 1 | `gate` | no candidate has ready work **and** `v_gates_pending` or `v_plans_pending_approval` is non-empty |
-| 2 | `infrastructure` | the stall counter reached 2 |
-| 3 | `max-tasks` | `used >= max_tasks` |
-| 4 | `max-minutes` | `minutes >= max_minutes` |
-| 5 | `idle` | no candidate has ready work and no gate is waiting either |
-| 6 | `collision` | two tickets wrote the same file — only you can see this |
+| 1 | `collision` | Step 4.3 |
+| 2 | `infrastructure` | the stall check fired, or an agent never reported back |
+| 3 | `max-plans` | plans started ≥ `max_plans` |
+| 4 | `max-minutes` | minutes ≥ `max_minutes` |
+| 5 | `needs-user` | nothing can run, and something waits on the user: pending plans the rules would not approve, issues past the fix limits, stuck plans, goals to sign off |
+| 6 | `idle` | nothing can run and nothing waits on the user |
 | 7 | `operator` | the user ended it |
 
-`gate` outranks the ceilings deliberately: if both are true at once, "a decision is waiting" is
-actionable and "out of budget" is noise. A pending **plan approval** counts as a gate here even
-when no `gate` row exists for it — the shift cannot rule on a plan any more than it can decide
-a gate, so name the plan in the stop report exactly as you would name the gate. `infrastructure` outranks them too, because a stalled
-loop reported as `max-tasks` is a lie that costs a whole night — it would say the shift did its
-ten when in fact it did nothing ten times.
+`needs-user` is the shift succeeding. It did everything it was allowed to and stopped at a
+decision only a person can make.
 
-## Step 3 — the stop, and its reason
-
-**Surface the reason first, before anything else.** It is the single most useful sentence in the
-morning. Close the shift with the second and last hand-written event:
+### Close the shift
 
 ```sql
 INSERT INTO event (ts, actor, verb, subject_type, subject_id, payload)
-SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'orchestrator', 'ended', 'shift',
+SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), 'orchestrator', 'ended', 'shift',
        eo.subject_id,
-       json_object('reason', 'gate', 'note', CAST(x'<hex>' AS TEXT),
-                   'tasks', 5, 'minutes', 42, 'requirement', 'REQ-007')
+       json_object('reason', 'needs-user', 'note', CAST(x'<hex>' AS TEXT),
+                   'plans', 6, 'minutes', 48)
   FROM event eo
  WHERE eo.subject_type = 'shift' AND eo.verb = 'started'
    AND NOT EXISTS (SELECT 1 FROM event ec
@@ -471,191 +302,55 @@ SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now'), 'orchestrator', 'ended', 'shift',
 RETURNING subject_id, payload;
 ```
 
-On `kumiai`: `record_event {verb: "ended", subject_type: "shift", subject_id: <the open
-shift's id>, payload: {reason: "gate", note: "…", tasks: 5, minutes: 42, requirement:
-"REQ-007"}}` — the note is a plain string, no hex.
+`reason` comes only from the table above. The morning report and `guild:brief` read it back.
 
-`reason` comes from the closed vocabulary above and nowhere else — `guild:brief` and the morning
-report both read it back, and a reason one surface writes and another cannot read is worse than
-no reason at all.
+---
 
-| Reason | What you say |
-|---|---|
-| `gate` | **This is the shift succeeding.** Go to Step 4. |
-| `infrastructure` | Something dispatched and never reported back. Name the requirement and the nodes left `running`. |
-| `max-tasks` / `max-minutes` | A ceiling, not a fault. Offer a longer shift. |
-| `idle` | The board is out of work a shift may take. Not "all done" — read `v_blocked_tasks`. |
-| `collision` | The tree was left untouched **on purpose**. This one is theirs to reconcile. |
-| `operator` | Nothing to explain. |
+## Step 6 — The morning report
 
-## Step 4 — at a gate: stop, present, and **never decide**
-
-A gate is the one thing a shift can never do, and the reason is structural: subagents cannot call
-`AskUserQuestion`, so a generated workflow physically cannot ask anything. That is not a
-limitation to work around — it is what makes unattended operation safe.
-
-**Never approve on the guild master's behalf. Not "the obvious ones", not "the trivial ones",
-not "to keep the shift going".** If you find yourself reasoning about which findings they would
-probably have picked, stop.
+The brief says where the project stands. This report says **what happened while the user
+was away**. Its window starts where the shift started:
 
 ```sql
-SELECT node_id, requirement_id, node_key, kind, prompt FROM v_gates_pending;
-SELECT id, requirement_id, status, gate_node_id, title FROM v_plans_pending_approval;
-```
-
-The second query is not redundant. A plan can be waiting on a person with **no gate row behind
-it** — approved in conversation on a small change, or a `gate_node_id` never linked — and the
-first query cannot see it. Present both lists.
-
-### `gate-plan` — before anything is built
-
-This gate belongs to `guild:new-requirement`. A shift that reaches one has found a requirement
-whose plan was never approved. **Do not approve it and do not build past it.** Gather and
-present, then hand it back:
-
-```sql
-SELECT body FROM requirement WHERE id = 'REQ-NNN';          -- one column: byte-exact
-SELECT body FROM plan WHERE requirement_id = 'REQ-NNN';
-SELECT json_object('task', id, 'group', COALESCE(parallel_group,''), 'files', files)
-  FROM task WHERE requirement_id = 'REQ-NNN' AND node_key = 'implement';
-SELECT id, node_key, kind, status FROM graph_node WHERE requirement_id = 'REQ-NNN' ORDER BY id;
-```
-
-(kumiai: `get` the requirement and the plan for their bodies, `list task where {requirement_id,
-node_key: "implement"}`, `list graph_node where {requirement_id}`.)
-
-Present the plan, its tickets and their file sets, and **every roster gap the plan's Technical
-Decisions records by name** — each is a member the strategist proposed and the guild does not
-have, and approving the plan is also approving the
-recruiting. Then say plainly: *this is yours to approve; `/guild:new-requirement` is where it
-happens.* Stop.
-
-### `gate-repairs` — after review
-
-Present this one in full, exactly as `guild:check-in` does. Gather everything the run collected:
-
-```sql
-SELECT id, task_id, reviewer, severity, disposition, file, line, summary FROM v_open_findings;
-SELECT id, severity, status, found_by, requirement_id, title FROM v_open_bugs;
-SELECT id, who, waived, replace(replace(COALESCE(reason,'-'), char(10),' '), '|','!'), title
-  FROM v_failed_tasks;
-```
-
-Put it up as **one decision, as a MULTI-SELECT** — one option per numbered item, so the user can
-approve some, all, or none:
-
-```
-REQ-007 — Session-backed authentication: the run is complete.
-
-  4 reviewers, 3 findings:
-    1. [security]     Unsigned callback token accepted          (major)
-    2. [edge-case]    Empty session id is not rejected          (major)
-    3. [architecture] Auth service reaches into the route layer (minor)
-  2 bugs filed during the run:
-    4. BUG-004 critical  Preference toggles silently revert after save
-  1 failed task:
-    5. TASK-013 Migrate legacy preference rows — migration is not idempotent
-
-Findings and bugs from REQ-007 — approve which get repaired.
-```
-
-Then, and only then, with their answer in hand — **two writes, always**, because setting
-`gate.status` does not move the node:
-
-```sql
-UPDATE gate SET status = 'approved',
-                decision = CAST(x'<hex-their-words>' AS TEXT),
-                decided_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
- WHERE node_id = 'REQ-007/gate-repairs' AND status = 'pending' RETURNING node_id, status;
-
-UPDATE graph_node SET status = 'done'
- WHERE id = 'REQ-007/gate-repairs'
-   AND (SELECT g.status FROM gate g WHERE g.node_id = graph_node.id) = 'approved'
-RETURNING id, status;
-```
-
-On `kumiai` that is one call: `resolve_gate {node: "REQ-007/gate-repairs", status: "approved",
-decision: "<their words>"}`, after `read_view v_ready_nodes where {id: "REQ-007/gate-repairs"}`
-returns the row (`kumiai.md` §4).
-
-The decision **is** the fan-out, so it is never blank — `none` is how they approve and repair
-nothing. Pass their own words through.
-
-**If the user is not there when the gate arrives, the shift is over.** Present it in your final
-message, notify, and stop. Do not hold the session open waiting.
-
-## Step 5 — the morning report
-
-This is a different question from the brief:
-
-- **`guild:brief`** — *where does the project stand.* Its spine is the board, as it is now.
-- **this report** — *what happened while I was away.* Its spine is the shift, and its window is
-  where the last shift began, not the last check-in.
-
-The rule for keeping them apart: **the brief reports state, the report reports events.**
-
-```sql
--- the shifts themselves, newest first
-SELECT json_object('shift', subject_id, 'ts', ts, 'verb', verb, 'payload', payload)
-  FROM event WHERE subject_type = 'shift' ORDER BY ts DESC, id DESC LIMIT 20;
-
--- everything that moved during the last shift
 SELECT json_object('ts', ts, 'actor', actor, 'verb', verb, 'type', subject_type,
-                   'subject', subject_id, 'title', subject_title, 'phrase', phrase)
+                   'id', subject_id, 'title', subject_title, 'phrase', phrase)
   FROM v_recent_activity
  WHERE ts >= (SELECT ts FROM event WHERE subject_type = 'shift' AND verb = 'started'
-               ORDER BY ts DESC, id DESC LIMIT 1)
- ORDER BY ts DESC;
+               ORDER BY ts DESC, id DESC LIMIT 1);
 
--- and what it left behind
-SELECT * FROM v_failed_tasks;
-SELECT id, requirement_id, status, who, reason FROM v_blocked_tasks ORDER BY id;
-SELECT node_id, requirement_id, node_key, kind FROM v_gates_pending;
-SELECT id, requirement_id, gate_node_id, title FROM v_plans_pending_approval;
+SELECT id, title FROM v_plans_pending_approval;
+SELECT id, issue_id, issue_title, title FROM v_plans_stuck;
+SELECT id, wait, title FROM v_plans_blocked;
+SELECT id, project_id, source, severity, title FROM v_open_issues;
+SELECT id, success_criteria, title FROM v_goals_complete;
 ```
 
-On `kumiai`: the shift events are `list event where {subject_type: "shift"}` newest first; the
-activity is `read_view v_recent_activity` with `where: {ts: {op: ">=", value: <the last
-started ts>}}`, newest first and paged; the four
-left-behind lists are one `read_view` each.
+Say it in this order, naming things rather than counting them:
 
-Narrate stop reason first, then what got done, then the decisions waiting, then what you would do
-next. **Name things** — "TASK-013 failed twice and was given up on; its edits are quarantined in
-`.guild/backup-revert-TASK-013-…`" is a briefing. "1 failure" is not.
+1. **Why it stopped**, in one sentence.
+2. **What waits on the user**: plans it would not approve and which rule failed, issues past
+   the fix limits, stuck plans with their quarantine folder, goals to sign off.
+3. **What got done**: plans completed with their commits, projects reviewed and documented,
+   docs written.
+4. **What it would do next.**
 
-## Step 6 — verify against §11, and put it in the report
-
-Run `guild:validate shift` before the morning report goes out, and fold the result into it.
-§11 of `docs/expectations.md` matters more than any other section, because **nothing enforces
-a single line of the MAY / MAY NOT table.** §11.a asserts you stopped at a gate and
-never past one, §11.b what you never touched, §11.c the failure policy, §11.d that a blocked
-ticket became a roster gap rather than a silent skip, §11.e that every stop said why, and
-§11.f the git safety checks — never pushed, never on the default branch. The assertions run
-*after* the night, not during it, so a failure here is something the user reads at breakfast.
-**Report every one with its rows, before the summary.** On `kumiai` the board-side sections run
-as `check_invariants {process: "shift"}`; §11.f is git, and runs locally as written.
+"PLAN-014 failed twice; its edits are in `.guild/quarantine/PLAN-014-…`" is a report. "1
+failure" is not.
 
 ## Arming it, and notifying on it
 
-Two opt-in features, neither part of running a single shift: a recurring cadence (`/loop` or a
-scheduled agent) so a shift becomes a night's work, and a `PushNotification` when a gate
-arrives or the night ends abnormally. Set up only on request — full detail, including the
-notify-marker file and the exact events to fire on: `references/automation.md`.
+Running shifts on a schedule, and push notifications when a shift needs the user, are both
+opt-in. Set them up only when asked: `references/automation.md`.
 
-## Rules — at a glance
+## Rules — the checklist
 
-Each is argued in full where it first applies above; this is the checklist, not the argument.
-
-1. Never decide a gate — not `gate-plan`, not `gate-repairs`, not "the obvious ones" (§4).
-2. Never push, never commit to the default branch, never rewrite history — the §2.2 allowlist
-   is the whole of what a shift may run.
-3. The budget is fixed when the shift opens (§1) — a different ceiling means a new shift.
-4. One requirement, one batch, per turn — never queue a whole segment blind (§2).
-5. A failure does not stop the run or wake the user (§2.5) — collected and judged at
-   `gate-repairs`, except a file collision or a requirement left with nothing runnable.
-6. Record both halves, always — the ticket and the node (§2.3) — then the moves the member
-   reported (a re-verified bug, a supersession). Only you move a status, on any table.
-7. Never improvise a member — no eligible agent means write the block (§2.5), not a substitute.
-8. Never change direction — no goal, project, priority, or retitling somebody else's work.
-9. `started` and `ended` are the only hand-written `event` rows, never updated or deleted (§1).
-10. End with the reason and the report (§3, §5), not a list of everything that went right.
+1. A shift is check-in without the user. Follow check-in. This page only lists the changes.
+2. Approve only under the Step 2 rules. Never deny, never answer for the user, never close a
+   goal.
+3. One fix plan per issue, and a failed fix is not fixed again.
+4. Commit each completed plan on the shift branch, its files only. Never push, never commit to
+   the default branch.
+5. Quarantine a failed plan's edits. Never delete them.
+6. The budget is fixed when the shift opens.
+7. `started` and `ended` are the only hand-written events.
+8. End with the reason first, then what waits on the user.

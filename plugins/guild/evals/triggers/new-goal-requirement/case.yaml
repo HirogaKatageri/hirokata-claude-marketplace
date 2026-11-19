@@ -1,0 +1,15 @@
+schema_version: "1.1"
+name: new-goal-requirement
+tags: [trigger]
+plugins: ["../../.."]
+runs: 3
+execution:
+  max_turns: 4
+  allowed_tools: [Skill, Read, Glob, Grep]
+  prompt: "add a requirement to the guild: sign-up should also accept Google accounts"
+graders:
+  - name: fires-new-goal
+    type: tool_used
+    tool: Skill
+    input_match: '"skill"\s*:\s*"(guild:)?new-goal"'
+
