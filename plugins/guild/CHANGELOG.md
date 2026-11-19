@@ -16,6 +16,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [10.0.0] - 2026-11-19
+
+### Changed (BREAKING)
+- **Schema v10: plans are the unit of work.** The hierarchy is goal → project → requirement →
+  plan, with status open / in-progress / done at every level and a separate plan `approval`
+  (pending / approved / rejected). Tasks, `task_capability` and the execution graph
+  (`graph_node`, `graph_edge`, gates) are removed. A requirement can have several plans; tests are
+  their own `test` plans that depend on the build plan.
+- **Capabilities sit on the plan** (`plan_capability`, required or preferred). `roster.py` matches
+  them against the agents' `capabilities:` frontmatter to pick who runs the plan.
+- **Failures and findings are issues.** A failed plan files an `execution` issue and stays
+  in-progress (there is no failed status); out-of-scope finds are `discovered` issues. Open issues
+  get fix plans, which still need approval.
+- **Check-in rewritten:** approvals first (Approve / Deny / Review, where Review sends the plan
+  back to the strategist with the user's feedback), then missing projects, requirements and plans
+  are filled in parallel, then ready plans run until done. The user approves every plan.
+- **Shift rewritten:** the orchestrator approves plans on its own, writes at most one fix plan
+  per issue, commits on a `guild/shift-*` branch, never asks the user, and records its start and
+  end on the board.
+- **A finished project is reviewed, then documented** — the review files issues and never fixes;
+  the librarian writes tagged docs linked in a doc-to-doc graph.
+- **One reviewer agent.** `reviewer-architecture`, `reviewer-business-logic`,
+  `reviewer-edge-case`, `reviewer-security` and `product-reviewer` become `agents/reviewer.md`
+  (Haiku, read only), which preloads the new `skills/review-lenses/` skill. The orchestrator
+  spawns one per lens and slice — requirements, business-logic, edge-cases and security per slice;
+  architecture and audit per project; at most four slices — then merges duplicate findings and
+  files them. The audit lens runs only the project's own checks. `comprehensive-review` uses the
+  same reviewers for an on-demand review.
+- **Removed:** `skills/new-requirement/`, `agents/test-planner.md`, and the old check-in
+  references (task lifecycle, workflow compilation, state format, edge cases).
+- **No migration.** A v9 board is not converted; v10 starts a fresh `.guild/guild.db`.
+
+### Added
+- **`skills/new-goal/`** — start a goal outside a check-in; check-in also starts one on an empty
+  board.
+- **`evals/`** — trigger cases and a planted-bug review case for `claude plugin eval`, and
+  `evals/board/`, a `claude -p` harness that checks check-in approvals, plan execution and shifts
+  against a seeded board. Every scenario passed 3 of 3 runs.
+
+### Fixed
+- **`roster.py` finds the plugin's own agents** when `CLAUDE_PLUGIN_ROOT` is unset, which it is
+  inside Bash. Before, no plan could be matched to a guild agent.
+
+### Known gaps
+- The `warehouse`, `brief`, `dashboard`, `validate`, `domain-software` and QA skills, and the
+  plugin README, still describe the v9 board.
+
+---
+
 ## [9.5.0] - 2026-11-16
 
 ### Changed
